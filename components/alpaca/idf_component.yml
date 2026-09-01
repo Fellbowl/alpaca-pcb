@@ -1,0 +1,16 @@
+# main/idf_component.yml
+#
+# En ESP-IDF v6.0+, cJSON dejo de ser un componente built-in ("json") y
+# paso a ser un componente gestionado via el IDF Component Manager. Este
+# archivo le dice a `idf.py` que lo descargue/vincule automaticamente en
+# el primer `idf.py build` (crea/actualiza dependencies.lock y la carpeta
+# managed_components/ en la raiz del proyecto -- no hace falta tocar nada
+# mas).
+#
+# Si tu proyecto tiene otros componentes propios (tmc2209, as5600, etc.)
+# que TAMBIEN incluyan cJSON.h directamente, ellos necesitan su propio
+# idf_component.yml con esta misma dependencia -- las dependencias no se
+# heredan entre componentes en ESP-IDF.
+
+dependencies:
+  espressif/cjson: "^1.7.19"
