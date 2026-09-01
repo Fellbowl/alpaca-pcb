@@ -130,26 +130,48 @@ int64_t focuser_handler_get_position(void) {
 - Estado no-inicializado retorna 0 (safe default)
 - Bajo overhead (lock rápido)
 
-## Halt Mechanism
+### `focuser_handler_move_to(int64_t target_position_usteps, TickType_t queue_timeout) → esp_err_t`
+Mueve focuser a posición absoluta.
 
-### Diseño Separado
+**Entrada:**
+- `target_position_usteps`: Posición destino (rango [0, max_step])
+- `queue_timeout`: Timeout de espera en cola (ej. `pdMS_TO_TICKS(100)`)
 
-**¿Por qué atomic_bool separado?**
-- Permite parada de emergencia sin deadlock
-- Signal handler podría necesitar halt sin esperar mutex
-- Lectura atómica más rápida que mutex en path crítico
+**Procedimiento:**
+1. Valida rango de posición
+2. Calcula delta = target - current_position
+3. Si delta == 0: Retorna ESP_OK (ya está ahí)
+4. Arma comando motor_cmd_t con:
+   - `steps = abs(delta)`
+   - `dir = (delta < 0) ? 1 : 0`  (dir=1 cierra, dir=0 abre)
+5. Encola en motor_cmd_queue con timeout
+6. Retorna:
+   - `ESP_OK`: Comando encolado
+   - `ESP_ERR_INVALID_ARG`: Posición fuera de rango
+   - `ESP_ERR_TIMEOUT`: Queue llena (timeout agotado)
+
+**Uso (ej. desde Alpaca HTTP):**
+```c
+// Mover a 100,000 micropasos
+focuser_handler_move_to(100000, pdMS_TO_TICKS(100));
+// Lee posición actual
+int64_t pos = focuser_handler_get_position();
+```
 
 ### `focuser_handler_request_halt(void)`
 Solicita parada de emergencia.
 
-**Llamada desde:**
-- Handler USB (Ctrl+C)
-- Timeout de seguridad
-- Comando de parada explícito
+- Settea `s_halt_requested = true` atomically
+- motor_task chequea este flag frecuentemente
+- No bloquea—solo flag atómico
 
-**Acción:**
-- motor_task chequea `s_halt_requested` frecuentemente
-- Detiene generación de pasos cuando true
+## Boundary Checking y Validaciones
+
+| Validación | Condición | Acción |
+|-----------|-----------|--------|
+| Posición en rango | `pos < 0 or pos > max_step` | Log warning, retorna `ESP_ERR_INVALID_ARG` |
+| Queue timeout | No hay espacio en 100ms | Retorna `ESP_ERR_TIMEOUT`, comando se pierde |
+| No inicializado | `!s_state.initialized` | Retorna `ESP_ERR_INVALID_STATE` |
 
 ## Integración con Transportes
 

@@ -22,6 +22,20 @@ MODULAR PCB WebSockets is an ESP32-S3 firmware for controlling a TMC2209 stepper
 - **Modular sensor drivers** — AS5600 and AHT21B drivers expose independent APIs and share an orchestrated I2C bus without depending on the TMC2209 or on each other.
 - **Fault-tolerant sensor initialization** — Sensor detection uses real device transactions with bounded retries; an unavailable sensor remains disabled while the rest of the firmware continues running.
 - **Remote telemetry and acknowledgements** — The embedded HTTP/WebSocket server broadcasts command acknowledgements and JSON telemetry without making the transport layer aware of motor or sensor semantics.
+- **Alpaca Focuser Protocol** — Step 3/5 of migration plan; management-only endpoints via `http://<ESP32-IP>:11111/alpaca/v1/focuser`
+
+## Documentación de Arquitectura
+
+Lea los archivos `.md` en cada carpeta de componentes para detalles de:
+
+- [**main.md**](main/main.md) — Orquestación de tasks, flujo de arranque, constantes de configuración
+- [**tmc2209.md**](components/tmc2209/tmc2209.md) — Protocolo UART Trinamic, CRC8, generación de micropasos
+- [**as5600.md**](components/as5600/as5600.md) — Encoder magnético, ángulo de 12 bits, bus I2C compartido
+- [**aht21b.md**](components/aht21b/aht21b.md) — Sensor de temperatura/humedad, calibración, I2C
+- [**ch224k.md**](components/ch224k/ch224k.md) — Controlador USB-C PD, selección de voltaje, Power Good
+- [**focuser_handler.md**](components/focuser_handler/focuser_handler.md) — State machine, mutex-protected, traducción de comandos
+- [**wifi_init.md**](components/wifi_init/wifi_init.md) — Conexión WiFi, reintentos, event groups
+- [**ws_server.md**](components/ws_server/ws_server.md) — Servidor HTTP/WebSocket, broadcast asincrónico, clients concurrentes
 
 ## Execution Flow
 
@@ -114,25 +128,59 @@ flowchart TD
 ## Repository Structure
 
 ```text
-MODULAR-PCB-WEBSOCKETS/
+MODULAR-PCB-FOCUSHANDLER/
 ├── CMakeLists.txt                 # Root ESP-IDF project definition
 ├── sdkconfig                      # ESP32-S3, console, Wi-Fi, and build configuration
+├── python_client.py               # Reference WebSocket command/telemetry client
+├── README.md                      # Este archivo
 ├── main/
 │   ├── main.c                     # System orchestration, tasks, queue, and protocols
+│   ├── main.md                    # Documentación de arquitectura y orquestación
 │   ├── CMakeLists.txt             # Main component dependencies
 │   └── idf_component.yml          # Managed cJSON dependency
 ├── components/
 │   ├── tmc2209/                   # TMC2209 UART and STEP/DIR driver
+│   │   ├── tmc2209.c              # Implementación
+│   │   ├── tmc2209.h              # Header público
+│   │   └── tmc2209.md             # Documentación de protocolo UART y API
 │   ├── as5600/                    # AS5600 magnetic encoder driver
+│   │   ├── as5600.c
+│   │   ├── as5600.h
+│   │   └── as5600.md              # Documentación de protocolo I2C y lectura de ángulo
 │   ├── aht21b/                    # AHT21B temperature/humidity driver
-│   ├── ch224k/                    # USB-C PD configuration, PG, and ADC driver
+│   │   ├── aht21b.c
+│   │   ├── aht21b.h
+│   │   └── aht21b.md              # Documentación de sensor de clima
+│   ├── ch224k/                    # USB-C PD controller, voltage selection, and monitoring
+│   │   ├── ch224k.c
+│   │   ├── ch224k.h
+│   │   └── ch224k.md              # Documentación de controlador de voltaje
+│   ├── focuser_handler/           # Focuser state and command translation
+│   │   ├── focuser_handler.c
+│   │   ├── focuser_handler.h
+│   │   └── focuser_handler.md     # Documentación de orquestación de estado
 │   ├── wifi_init/                 # Wi-Fi station initialization
+│   │   ├── wifi_init.c
+│   │   ├── wifi_init.h
+│   │   └── wifi_init.md           # Documentación de conexión WiFi
 │   └── ws_server/                 # HTTP/WebSocket server abstraction
+│       ├── ws_server.c
+│       ├── ws_server.h
+│       └── ws_server.md           # Documentación de servidor WebSocket
 ├── managed_components/
 │   └── espressif__cjson/          # ESP-IDF Component Manager cJSON component
-├── python_client.py               # Reference WebSocket command/telemetry client
-└── build/                         # Generated ESP-IDF build artifacts
+└── build/                         # Generated ESP-IDF build artifacts (gitignored)
 ```
+
+### Documentación por Componente
+
+Cada componente tiene un archivo `.md` con:
+- **Descripción General**: Propósito y características
+- **Protocolo/Hardware**: Detalles internos (registros, comandos, pines)
+- **API Pública**: Funciones con parámetros y retorno
+- **Integración**: Cómo se conecta con el resto del sistema
+- **Notas de Diseño**: Decisiones arquitectónicas y trade-offs
+- **Manejo de Errores**: Casos de fallo y mitigaciones
 
 ## Setup & Build Instructions
 

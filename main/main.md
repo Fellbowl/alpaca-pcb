@@ -1,7 +1,7 @@
 # main.c - Orquestación Principal
 
 ## Propósito
-Archivo central que orquesta toda la arquitectura del ESP32-S3 para el MODULAR-PCB-FOCUSHANDLER. Coordina tres tareas de FreeRTOS independientes (motor_task, i2c_sensors_task, cmd_input_task) y gestiona la comunicación entre módulos periféricos (TMC2209, AS5600, AHT21B, CH224K) mediante estructuras de datos compartidas desacopladas.
+Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en dos núcleos, inicializa periféricos (TMC2209, AS5600, AHT21B, CH224K), gestiona Wi-Fi, servidor WebSocket, protocolo Alpaca, y mantiene desacoplamiento modular mediante colas y semáforos. No contiene lógica de protocolos específicos—solo arma configuración y coordina tasks.
 
 ## Arquitectura General
 
@@ -71,15 +71,28 @@ Archivo central que orquesta toda la arquitectura del ESP32-S3 para el MODULAR-P
 - DIR=0: Abre focuser (posición aumenta)
 - DIR=1: Cierra focuser (posición disminuye)
 
+## Tareas FreeRTOS Principales
+
+| Task | Core | Prioridad | Responsabilidad |
+|------|------|-----------|-----------------|
+| motor_task | 1 | 10 (alta) | Genera pulsos STEP al TMC2209, reporta posición a focuser_handler |
+| cmd_input_task | 0 | 5 | Lee comandos USB Serial/JTAG, parsea `steps,direction`, encola en motor_cmd_queue |
+| i2c_sensors_task | 0 | 6 | Lee AS5600 (ángulo) y AHT21B (temperatura) periódicamente, reporta a focuser_handler |
+| power_monitor_task | 0 | 1 (baja) | Monitorea CH224K, libera power_good_sem cuando PG=OK |
+| preset_cmd_task | 0 | 3 | Encola comandos predefinidos en motor_cmd_queue |
+| ws_telemetry_task | 0 | 3 | Broadcast JSON con estado cada 5s si cliente WS conectado |
+
 ## Notas de Diseño Críticas
 
 ### 1. Fail-Fast vs Degradación Controlada
-- `tmc2209_init()` usa `ESP_ERROR_CHECK()` internamente: si el UART no funciona, aborta el firmware (sin motor no hay propósito).
-- Si un sensor I2C falla: `i2c_sensors_task` loguea el error, marca sensor como `ready=false`, pero continúa ejecutándose. Un sensor caído no tumba el sistema.
+- **TMC2209 (UART motor)**: `ESP_ERROR_CHECK()` en `tmc2209_init()` → aborta si falla (sin motor no hay propósito).
+- **Sensores I2C**: Si AS5600 o AHT21B no responden → marcan `ready=false`, task continúa, sistema sigue operativo.
+- **WiFi/WebSocket**: Fallos no detienen motor—solo pierde control remoto.
 
 ### 2. Reintentos de Arranque
-- `motor_task` reintenta indefinidamente con backoff de 1s (loguea cada 10 intentos) hasta conseguir comunicación válida con TMC2209.
-- `i2c_retry_detect()` en main.c maneja la lógica de reintentos N veces con espera fija (orquestación, no parte del protocolo).
+- **motor_task**: Reintenta indefinidamente (backoff 1s, log cada 10 intentos) hasta comunicación TMC2209 válida.
+- **Sensores I2C**: `i2c_retry_detect()` → máximo 8 intentos × 100ms = 800ms total antes de desistir.
+- Reintentos son **orquestación**, no protocolo—viven en main.c, no en drivers.
 
 ### 3. Detección de Sensores I2C
 - **NO usa** `i2c_master_probe()` (genera falsos timeouts con sensores válidos en esta versión de ESP-IDF).
@@ -143,14 +156,54 @@ static void i2c_sensors_task(void *arg) { ... }
 - Temperatura (temperature_c)
 - Configuración de tempcomp
 
+## Flujo de Arranque (app_main)
+
+1. **Configura LEDs de estado** (GPIO10, GPIO12)
+2. **Crea motor_cmd_queue** (4 elementos, tipo motor_cmd_t)
+3. **Inicializa focuser_handler** con límites lógicos del focuser
+4. **Crea power_good_sem** (semáforo binario)
+5. **Conecta WiFi** (bloquea hasta conectado o agota reintentos)
+   - Si WiFi OK → inicia ws_server y alpaca_start
+   - Si falla → continúa sin control remoto
+6. **Crea tasks en orden**:
+   - motor_task (Core 1, prioridad 10)
+   - cmd_input_task (Core 0, prioridad 5)
+   - i2c_sensors_task (Core 0, prioridad 6)
+   - power_monitor_task (Core 0, prioridad 1)
+   - preset_cmd_task (si habilitada)
+   - ws_telemetry_task (si WiFi OK)
+
+## Constantes de Configuración Principales
+
+| Parámetro | Valor | Uso |
+|-----------|-------|-----|
+| MICROSTEPS | 256 | Resolución fija 1/256 |
+| FULL_STEPS_PER_REV | 200 | Pasos completos por revolución |
+| MAX_STEPS_PER_COMMAND | 204800 | Límite por comando (51200 × 4) |
+| MOTOR_CMD_QUEUE_LEN | 4 | Elementos en cola de comandos |
+| FOCUSER_MAX_STEP_USTEPS | 206300 | Rango máximo de movimiento |
+| FOCUSER_STEP_SIZE_UM | 0.239 | Micrómetros por micropaso |
+| I2C_SENSOR_POLL_PERIOD_MS | 200 | Lectura de sensores cada 200ms |
+| WS_TELEMETRY_PERIOD_MS | 5000 | Broadcast WebSocket cada 5s |
+| TARGET_REV_PER_SEC_START | 0.05 | Velocidad de arranque (~10 RPM) |
+| TARGET_REV_PER_SEC_CRUISE | 0.30 | Velocidad crucero (~18 RPM) |
+
 ## Compilación y Ejecución
 
-El proyecto usa **ESP-IDF con CMake**. Configuración:
-- Target: `esp32s3`
-- Entrada de comandos: USB Serial/JTAG nativo (sin chip USB-UART externo)
-- WebSocket: Por WiFi (futuro, se inicializa en main)
+```bash
+# Configurar target y build
+. $HOME/esp/esp-idf/export.sh
+idf.py set-target esp32s3
+idf.py build
+
+# Flashear y monitorear
+idf.py -p /dev/ttyACM0 flash monitor
+```
 
 ## Archivos Relacionados
-- `motor_cmd.h` - Definición de estructura de comandos
-- `sdkconfig` - Configuración de ESP-IDF
-- `CMakeLists.txt` - Compilación
+- `motor_cmd.h` - Contrato de cola de comandos (struct motor_cmd_t)
+- `focuser_handler.h` - API de state del focuser
+- Drivers: `tmc2209.h`, `as5600.h`, `aht21b.h`, `ch224k.h`
+- `ws_server.h`, `wifi_init.h`, `alpaca.h` - Networking
+- `sdkconfig` - Configuración ESP-IDF
+- `CMakeLists.txt` - Build rules
