@@ -28,6 +28,7 @@ MODULAR PCB WebSockets is an ESP32-S3 firmware for controlling a TMC2209 stepper
 
 Lea los archivos `.md` en cada carpeta de componentes para detalles de:
 
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** ⭐ — Guía completa de arquitectura, tareas, sincronización, flujos (COMIENZA AQUÍ)
 - [**main.md**](main/main.md) — Orquestación de tasks, flujo de arranque, constantes de configuración
 - [**tmc2209.md**](components/tmc2209/tmc2209.md) — Protocolo UART Trinamic, CRC8, generación de micropasos
 - [**as5600.md**](components/as5600/as5600.md) — Encoder magnético, ángulo de 12 bits, bus I2C compartido
