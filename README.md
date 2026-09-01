@@ -1,4 +1,4 @@
-# MODULAR PCB WebSockets
+# MODULAR PCB Alpaca
 > ESP32-S3 firmware for stepper motor control, magnetic angle sensing, environmental monitoring, USB commands, and WebSocket telemetry/control.
 
 ![ESP32-S3](https://img.shields.io/badge/ESP32--S3-E7352C?style=flat&logo=espressif&logoColor=white)
