@@ -145,6 +145,18 @@ static void alpaca_http_task(void *arg)
     config.server_port = port;
     config.max_uri_handlers = 4; /* margen chico para las rutas del Paso 4/5 */
 
+    /* ctrl_port: puerto UDP de loopback interno que httpd usa para su
+     * propia comunicacion (no es el puerto TCP publico que expone el
+     * servidor). HTTPD_DEFAULT_CONFIG() lo fija en un valor fijo
+     * (32768) -- si ws_server (tambien esp_http_server) ya lo tomo
+     * primero, esta segunda instancia falla al crear su "ctrl socket"
+     * con ESP_FAIL/errno 112, SIN IMPORTAR que los puertos TCP publicos
+     * (80 vs este) sean distintos. Se fija a mano en un valor que no
+     * choque con el de ws_server -- ver nota en alpaca.h/alpaca_config_t
+     * si en el futuro conviene hacerlo configurable en vez de sumar 1
+     * aqui mismo. */
+    config.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;
+
     esp_err_t err = httpd_start(&alpaca_httpd, &config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "[alpaca_http_task] No se pudo arrancar httpd Alpaca (%s). Task terminada.",
