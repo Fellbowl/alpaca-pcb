@@ -718,6 +718,7 @@ static void motor_task(void *arg)
         .mres = TMC_MRES,
         .rev_per_sec_start = TARGET_REV_PER_SEC_START,
         .rev_per_sec_cruise = TARGET_REV_PER_SEC_CRUISE,
+        .halt_check_fn = focuser_handler_halt_requested,
     };
 
     /* tmc2209_init() aborta internamente (ESP_ERROR_CHECK) si el UART no
@@ -809,6 +810,17 @@ static void motor_task(void *arg)
 
         focuser_handler_report_move_done(executed_signed);
         focuser_handler_set_moving(false);
+
+        /* Paso 5: se consume el flag de halt SIEMPRE tras cada
+         * movimiento, se haya pedido o no -- focuser_handler_halt_consume()
+         * es idempotente (solo pone el atomic_bool en false), y hacerlo
+         * incondicionalmente evita tener que comparar cmd.steps contra
+         * executed_signed para "adivinar" si hubo un halt real. Si no
+         * se consumiera aqui, un halt pedido DURANTE este movimiento
+         * pero que tmc2209_move_steps() ya atendio internamente dejaria
+         * la bandera en true y el SIGUIENTE comando de movimiento se
+         * frenaria de inmediato sin razon. */
+        focuser_handler_halt_consume();
 
         vTaskDelay(pdMS_TO_TICKS(50)); /* asentamiento antes de leer estado */
         tmc2209_check_status(&motor, "tras comando");

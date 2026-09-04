@@ -321,10 +321,64 @@ int32_t tmc2209_move_steps(tmc2209_t *drv, uint32_t n, int dir_level)
         ramp = 1;
     }
 
-    for (uint32_t i = 0; i < n; i++) {
-        uint32_t half_period;
+    /* ---- Estado de frenado anticipado (Paso 5: halt) ----
+     * halting: una vez true, ya abandonamos el plan original de n pasos
+     * y estamos ejecutando NUESTRA propia rampa de frenado -- no se
+     * vuelve a consultar halt_check_fn ni se vuelve a entrar en las
+     * ramas de arranque/crucero/frenado-natural de abajo.
+     *
+     * decel_remaining: cuantos micropasos le faltan a esta rampa de
+     * frenado propia para llegar a la velocidad de arranque (0 = ya
+     * llegamos, momento de parar del todo). Se inicializa al detectar
+     * el halt con el "progreso de aceleracion equivalente" en ese
+     * instante (ver mas abajo) para que el frenado sea simetrico a
+     * como se acelero -- ni mas brusco ni mas lento que la rampa normal. */
+    bool halting = false;
+    uint32_t decel_remaining = 0;
 
-        if (i < ramp) {
+    for (uint32_t i = 0; i < n; i++) {
+        /* Chequeo de halt: solo si hay callback configurado, solo si
+         * todavia no iniciamos nuestra propia rampa de frenado, y solo
+         * si no estamos ya dentro de la rampa de frenado NATURAL del
+         * final del movimiento planeado (i >= n - ramp) -- ahi ya se
+         * esta decelerando de todas formas, intervenir no aporta nada
+         * y solo complicaria la contabilidad de pasos ejecutados. */
+        if (!halting && drv->cfg.halt_check_fn != NULL &&
+            i < n - ramp && drv->cfg.halt_check_fn()) {
+            /* accel_progress: en que punto EQUIVALENTE de la rampa de
+             * aceleracion estamos ahora mismo, segun la velocidad
+             * actual -- si i < ramp todavia estamos acelerando, asi
+             * que es directamente i; si ya pasamos el ramp, estamos a
+             * velocidad de crucero, equivalente a "recien terminada"
+             * la aceleracion (progreso = ramp completo). */
+            uint32_t accel_progress = (i < ramp) ? i : ramp;
+            halting = true;
+            decel_remaining = accel_progress;
+            ESP_LOGI(TAG, "[tmc2209_move_steps] Halt solicitado en paso %lu/%lu -- "
+                           "frenando en %lu micropasos (en vez de continuar hasta %lu).",
+                     (unsigned long)i, (unsigned long)n,
+                     (unsigned long)(decel_remaining + 1), (unsigned long)n);
+        }
+
+        uint32_t half_period;
+        bool halt_final_pulse = false;
+
+        if (halting) {
+            /* Misma formula lineal que la rampa de arranque/frenado
+             * normal, pero usando decel_remaining como "distancia a
+             * la velocidad de arranque" en vez de una posicion fija
+             * dentro de n -- por eso la velocidad de este primer pulso
+             * de frenado coincide exactamente con la que ya traiamos
+             * (continuidad, sin salto brusco de velocidad). */
+            half_period = drv->half_period_start_us -
+                (uint32_t)(((int64_t)(drv->half_period_start_us - drv->half_period_cruise_us) * decel_remaining) / ramp);
+            /* decel_remaining==0 -> este es el pulso final, a la
+             * velocidad mas lenta -- se EJECUTA (igual que el ultimo
+             * pulso de una rampa de frenado natural, ver rama de abajo
+             * con j==0) y DESPUES de hacerlo se termina el movimiento
+             * entero, sin llegar a los n pasos originalmente pedidos. */
+            halt_final_pulse = (decel_remaining == 0);
+        } else if (i < ramp) {
             half_period = drv->half_period_start_us -
                 (uint32_t)(((int64_t)(drv->half_period_start_us - drv->half_period_cruise_us) * i) / ramp);
         } else if (i >= n - ramp) {
@@ -340,6 +394,13 @@ int32_t tmc2209_move_steps(tmc2209_t *drv, uint32_t n, int dir_level)
         gpio_set_level(drv->cfg.pin_step, 0);
         esp_rom_delay_us(half_period);
         usteps_count += 1 - (dir_level << 1);
+
+        if (halting) {
+            if (halt_final_pulse) {
+                break; /* rampa de frenado completa, movimiento terminado */
+            }
+            decel_remaining--;
+        }
 
         if ((i % YIELD_EVERY_N_STEPS) == 0) {
             vTaskDelay(1);
