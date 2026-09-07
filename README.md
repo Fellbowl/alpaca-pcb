@@ -1,5 +1,5 @@
 # MODULAR PCB Alpaca
-> ESP32-S3 firmware for stepper motor control, magnetic angle sensing, environmental monitoring, USB commands, and WebSocket telemetry/control.
+> ESP32-S3 firmware for stepper motor control, magnetic angle sensing, environmental monitoring, ASCOM Alpaca control, and WebSocket telemetry/control.
 
 ![ESP32-S3](https://img.shields.io/badge/ESP32--S3-E7352C?style=flat&logo=espressif&logoColor=white)
 ![C](https://img.shields.io/badge/C-A8B9CC?style=flat&logo=c&logoColor=white)
@@ -12,7 +12,7 @@
 
 ## Overview
 
-MODULAR PCB WebSockets is an ESP32-S3 firmware for controlling a TMC2209 stepper driver while observing motor angle, temperature, humidity, and power-delivery status. The application is organized as independent ESP-IDF components coordinated by `main.c`, with FreeRTOS tasks and a command queue separating command sources from time-sensitive step generation. A native WebSocket server provides remote JSON commands and periodic telemetry, while a Python client supplies a reference control interface. The design targets modular mechatronics and embedded-control prototypes where motor timing must remain isolated from networking and sensor activity.
+MODULAR PCB Alpaca is an ESP32-S3 firmware for controlling a TMC2209 stepper driver while observing motor angle, temperature, humidity, and power-delivery status. The application is organized as independent ESP-IDF components coordinated by `main.c`, with FreeRTOS tasks and a command queue separating command sources from time-sensitive step generation. ASCOM Alpaca provides the standard focuser HTTP API, while WebSocket remains available for low-level relative moves, acknowledgements, and periodic telemetry. A Python client supplies a reference WebSocket interface.
 
 ## Features / Highlights
 
@@ -22,7 +22,7 @@ MODULAR PCB WebSockets is an ESP32-S3 firmware for controlling a TMC2209 stepper
 - **Modular sensor drivers** — AS5600 and AHT21B drivers expose independent APIs and share an orchestrated I2C bus without depending on the TMC2209 or on each other.
 - **Fault-tolerant sensor initialization** — Sensor detection uses real device transactions with bounded retries; an unavailable sensor remains disabled while the rest of the firmware continues running.
 - **Remote telemetry and acknowledgements** — The embedded HTTP/WebSocket server broadcasts command acknowledgements and JSON telemetry without making the transport layer aware of motor or sensor semantics.
-- **Alpaca Focuser Protocol** — Step 3/5 of migration plan; management-only endpoints via `http://<ESP32-IP>:11111/alpaca/v1/focuser`
+- **ASCOM Alpaca Focuser API** — Management, focuser GET endpoints, absolute `Move`, and `Halt` are served on TCP port `11111`.
 
 ## Documentación de Arquitectura
 
@@ -30,6 +30,7 @@ Lea los archivos `.md` en cada carpeta de componentes para detalles de:
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** ⭐ — Guía completa de arquitectura, tareas, sincronización, flujos (COMIENZA AQUÍ)
 - [**main.md**](main/main.md) — Orquestación de tasks, flujo de arranque, constantes de configuración
+- [**alpaca.md**](components/alpaca/alpaca.md) — API ASCOM Alpaca, endpoints, respuestas y control del focuser
 - [**tmc2209.md**](components/tmc2209/tmc2209.md) — Protocolo UART Trinamic, CRC8, generación de micropasos
 - [**as5600.md**](components/as5600/as5600.md) — Encoder magnético, ángulo de 12 bits, bus I2C compartido
 - [**aht21b.md**](components/aht21b/aht21b.md) — Sensor de temperatura/humedad, calibración, I2C
@@ -52,9 +53,9 @@ flowchart TD
     G --> H
     H --> I[power_monitor_task: initialize CH224K]
     H --> J[motor_task on Core 1]
-    H --> K[cmd_input_task on Core 0]
+   H --> K[cmd_input_task on Core 0 - optional legacy]
     H --> L[i2c_sensors_task on Core 0]
-    H --> M[preset_cmd_task]
+   H --> M[preset_cmd_task - temporary legacy]
     I --> N{Power Good?}
     N -->|No| I
     N -->|Yes, once| O[Release motor_task semaphore]
@@ -85,7 +86,7 @@ flowchart TD
 | Console | USB Serial/JTAG | Commands use `steps,direction`, for example `2000,1` |
 | Motor resolution | 1/256 microstepping | Fixed by `TMC_MRES=0` and `MICROSTEPS=256` |
 | Full steps per revolution | 200 | One revolution equals 51,200 microsteps |
-| Maximum command | 1,024,000 microsteps | `200 * 256 * 20` per command |
+| Maximum relative command | 204,800 microsteps | `200 * 256 * 4` per command |
 | Motor speed profile | 0.05 to 0.30 rev/s | Start and cruise values configured in `main.c` |
 | Command queue length | 4 entries | Queue element type is `motor_cmd_t` |
 
@@ -123,6 +124,7 @@ flowchart TD
 | Telemetry period | 5 s | Broadcast only when at least one client is connected |
 | Telemetry fields | `power_good`, `encoder_angle`, `climate_temperature` | JSON broadcast from the firmware |
 | WebSocket acknowledgement | `{"ack":"queued","steps":N,"dir":D}` | Sent after queue insertion |
+| Alpaca endpoint | `http://<ESP32-IP>:11111/api/v1/focuser/0` | GET state, PUT `/move` and `/halt` |
 | CH224K voltage preset | 20 V | Selected through `CH224K_VOLTAGE_20V` |
 | ADC divider | R1 = 20.0 kOhm, R2 = 2.7 kOhm | Used by the CH224K voltage-sense configuration |
 
@@ -160,6 +162,10 @@ MODULAR-PCB-FOCUSHANDLER/
 │   │   ├── focuser_handler.c
 │   │   ├── focuser_handler.h
 │   │   └── focuser_handler.md     # Documentación de orquestación de estado
+│   ├── alpaca/                     # ASCOM Alpaca HTTP server and focuser API
+│   │   ├── alpaca.c
+│   │   ├── include/alpaca.h
+│   │   └── alpaca.md               # Documentación de endpoints y contratos
 │   ├── wifi_init/                 # Wi-Fi station initialization
 │   │   ├── wifi_init.c
 │   │   ├── wifi_init.h
@@ -196,7 +202,7 @@ Cada componente tiene un archivo `.md` con:
 2. **Select the ESP32-S3 target and configure the project**
 
    ```bash
-   cd /home/juan/Documents/Microcontroladores/ESP32/MODULAR-PCB-WEBSOCKETS
+   cd /home/juan/Documents/Microcontroladores/ESP32/MODULAR-PCB-FOCUSHANDLER
    idf.py set-target esp32s3
    idf.py menuconfig
    ```

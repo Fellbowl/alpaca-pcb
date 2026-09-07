@@ -8,8 +8,8 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 ### Distribución de Núcleos
 - **Core 0 (PRO_CPU)**: 
   - `cmd_input_task` - Lee comandos por USB Serial/JTAG
-  - `mqtt_task` (futuro) - Recibirá comandos MQTT
-  - `i2c_sensors_task` - Gestiona sensores en buses I2C
+  - `mqtt_task` (no implementada) - Punto de extensión futuro
+  - `i2c_sensors_task` - Gestiona sensores en un bus I2C compartido
   - Reservado para stack WiFi/BT de Espressif
 
 - **Core 1 (APP_CPU)**: 
@@ -20,9 +20,9 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 
 1. **Motor en Core 1 aislado**: El stack WiFi de Espressif está anclado al core 0. Las ISRs de radio causarían jitter en `tmc2209_move_steps()` (bit-bang de GPIO con precisión de microsegundos), resultando en pérdida de sincronismo o vibración del motor.
 
-2. **Sensores I2C en Core 0**: AS5600 y AHT21B usan dos buses I2C físicamente independientes (I2C_NUM_0 y I2C_NUM_1). Si un bus se bloquea momentáneamente, no afecta al Core 1.
+2. **Sensores I2C en Core 0**: AS5600 y AHT21B se registran sobre el mismo bus físico creado por `i2c_sensors_task` (`I2C_NUM_0`, SDA GPIO8, SCL GPIO9). Las lecturas se ejecutan secuencialmente en la misma task, por lo que no hay carrera entre sensores y un bloqueo no afecta al Core 1.
 
-3. **Desacoplamiento mediante colas**: `motor_cmd_queue` es el único contrato entre entrada de comandos (consola USB, MQTT) y ejecución. `cmd_input_task` y futuro `mqtt_task` solo saben armar comandos; `motor_task` nunca cambia.
+3. **Desacoplamiento mediante colas**: `motor_cmd_queue` es el contrato común entre las interfaces activas y el motor. WebSocket y Alpaca son las interfaces remotas activas; `cmd_input_task` es un canal local opcional y MQTT todavía no está implementado.
 
 4. **Semáforo de Power Good (PG)**: `power_good_sem` desacopla `motor_task` de `power_monitor_task`. Motor solo energiza el driver después de confirmar PG.
 
@@ -37,6 +37,7 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 | focuser_handler.c | Lógica del focuser | Estado único de verdad, posición, tempcomp |
 | ws_server.c | Servidor WebSocket | HTTP, handshake WS, broadcast |
 | wifi_init.c | Inicialización de WiFi | Stack WiFi, eventos, reconexión |
+| alpaca.c | Servidor ASCOM Alpaca | Management, estado del focuser, Move y Halt |
 
 ## Configuración de Hardware
 
@@ -52,7 +53,7 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 
 ### Sensores I2C
 - **I2C_NUM_0**: AS5600 (0x36) + AHT21B (0x38) en bus compartido
-- **I2C_NUM_1**: Disponible para futuros sensores
+- **I2C_NUM_1**: No utilizado por el firmware actual
 
 ## Protocolo de Comandos
 
@@ -76,10 +77,10 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 | Task | Core | Prioridad | Responsabilidad |
 |------|------|-----------|-----------------|
 | motor_task | 1 | 10 (alta) | Genera pulsos STEP al TMC2209, reporta posición a focuser_handler |
-| cmd_input_task | 0 | 5 | Lee comandos USB Serial/JTAG, parsea `steps,direction`, encola en motor_cmd_queue |
+| cmd_input_task | 0 | 5 | Canal local opcional/legacy: lee USB Serial/JTAG y parsea `steps,direction` |
 | i2c_sensors_task | 0 | 6 | Lee AS5600 (ángulo) y AHT21B (temperatura) periódicamente, reporta a focuser_handler |
 | power_monitor_task | 0 | 1 (baja) | Monitorea CH224K, libera power_good_sem cuando PG=OK |
-| preset_cmd_task | 0 | 3 | Encola comandos predefinidos en motor_cmd_queue |
+| preset_cmd_task | 0 | 4 | Movimiento de prueba/legacy: encola un movimiento predefinido y termina |
 | ws_telemetry_task | 0 | 3 | Broadcast JSON con estado cada 5s si cliente WS conectado |
 
 ## Notas de Diseño Críticas
@@ -170,7 +171,7 @@ static void i2c_sensors_task(void *arg) { ... }
    - cmd_input_task (Core 0, prioridad 5)
    - i2c_sensors_task (Core 0, prioridad 6)
    - power_monitor_task (Core 0, prioridad 1)
-   - preset_cmd_task (si habilitada)
+  - preset_cmd_task (actualmente activa como movimiento de prueba; legacy)
    - ws_telemetry_task (si WiFi OK)
 
 ## Constantes de Configuración Principales

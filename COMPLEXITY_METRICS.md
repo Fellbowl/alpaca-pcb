@@ -157,7 +157,7 @@ wifi_init.c             2 funciones   (3%)
    └─ Archivo: tmc2209.c (349 LOC)
 
 2. I2C (AS5600 + AHT21B)
-   ├─ Buses: 2 SEPARADOS (I2C_NUM_0 y I2C_NUM_1)
+   ├─ Bus: 1 compartido (I2C_NUM_0, AS5600 + AHT21B)
    ├─ Frecuencias: 400 kHz (AS5600), 100 kHz (AHT21B)
    ├─ Direcciones: 0x36 (AS5600), 0x38 (AHT21B)
    ├─ Polling: 200 ms (sensores)
@@ -181,7 +181,7 @@ wifi_init.c             2 funciones   (3%)
 5. HTTP (ASCOM Alpaca Focuser)
    ├─ Puerto: 11111 (management)
    ├─ Endpoints: Management (actual)
-   ├─ Status: Step 3/5 (INCOMPLETO)
+   ├─ Status: Management + GET + PUT Move/Halt (activo)
    ├─ Pending: Endpoints de control (Steps 4/5)
    ├─ Complejidad: MEDIA (REST estándar, pero incompleto)
    └─ Archivo: alpaca.c (236 LOC)
@@ -225,10 +225,10 @@ Periféricos de ESP32-S3:          8 unidades
    ├─ Frecuencia: 400 kHz
    └─ Propiedad: i2c_sensors_task
 
-3. I2C_NUM_1
-   ├─ Propósito: AHT21B (sensor clima)
-   ├─ Pines: GPIO 8 (SDA), GPIO 9 (SCL)  ⚠️ MISMO PINES pero bus diferente
-   ├─ Frecuencia: 100 kHz
+3. AHT21B sobre el bus compartido
+   ├─ Propósito: Sensor clima
+   ├─ Pines: GPIO 8 (SDA), GPIO 9 (SCL), mismo I2C_NUM_0
+   ├─ Frecuencia configurada: 100 kHz
    └─ Propiedad: i2c_sensors_task
 
 4-7. GPIO Digitales (8 pines)
@@ -286,7 +286,7 @@ Escritores de focuser_state:         2 tasks
 Lectores de focuser_state:           3 tasks
 ├─ ws_telemetry_task         (broadcast status)
 ├─ cmd_input_task            (validación)
-└─ alpaca_task (futuro)      (endpoints HTTP)
+└─ alpaca_http_task          (endpoints HTTP activos)
 
 Protección: Mutex focuser_handler
 
@@ -430,7 +430,7 @@ radon cc -a main/main.c components/*/*.c
    └─ Mitigación Actual: ✓ BIEN DOCUMENTADO
 
 3. ALPACA HTTP INCOMPLETO
-   ├─ Causa: Endpoints de control no implementados (Step 3/5)
+   ├─ Causa: Los endpoints Alpaca de control todavía requieren pruebas de integración
    ├─ Síntoma: Clientes HTTP no pueden controlar motor
    ├─ Prevención: Completar Steps 4/5
    ├─ Timeline: Fase 2 del roadmap
@@ -605,7 +605,7 @@ echo "5000,0" > /dev/ttyUSB0  # desde Python/terminal
    └─ Impacto: Alto
 
 2. ⚠️ COMPLETAR Alpaca HTTP (Steps 4/5)
-   ├─ Estado: Step 3/5 (management only)
+   ├─ Estado: Management + GET + PUT Move/Halt implementados
    ├─ Propuesta: Agregar endpoints de control
    ├─ Beneficio: Sistema usable con software externo
    ├─ Tiempo: 2-3 horas
@@ -759,7 +759,7 @@ PUNTOS DÉBILES:
 ✗ main.c concentra 42% del código (refactorizar)
 ✗ 6 tasks concurrentes (alto riesgo si no se respetan patrones)
 ✗ 5 protocolos (gran superficie de bugs)
-✗ Alpaca HTTP incompleto (Step 3/5)
+⚠️ Alpaca HTTP implementado; falta validar integración completa con clientes externos
 ✗ Sin pruebas unitarias documentadas
 
 RECOMENDACIONES INMEDIATAS:

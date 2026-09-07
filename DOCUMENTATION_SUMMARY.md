@@ -1,13 +1,41 @@
 # RESUMEN DE DOCUMENTACIÓN ACTUALIZADA
 
-Fecha: 2026-08-31
+Fecha de documento original: 2026-08-31
 Proyecto: MODULAR-PCB-FOCUSHANDLER
+
+## Revisión del Proyecto - 2026-09-07
+
+La documentación fue revisada contra el código actual. Desde el resumen original se incorporó el componente `alpaca` y la migración ya no está limitada a endpoints de management: el firmware implementa management, lecturas del focuser, `PUT /move` y `PUT /halt`.
+
+### Cambios reflejados
+
+- Se añadió [alpaca.md](components/alpaca/alpaca.md).
+- `README.md` ahora describe Alpaca como interfaz activa en el puerto `11111`.
+- `ARCHITECTURE.md` ahora documenta Alpaca, sus rutas y el código legacy.
+- `main.md` ahora refleja que AS5600 y AHT21B comparten un único bus `I2C_NUM_0`.
+- El límite real de comandos relativos es `204800` micropasos (`200 * 256 * 4`).
+- Se eliminó de la documentación la afirmación de que Alpaca estaba en Step 3/5.
+
+### Código legacy identificado
+
+Estos elementos siguen compilándose o están presentes como soporte, pero no son necesarios para operar mediante Alpaca o WebSocket:
+
+| Elemento | Ubicación | Clasificación |
+|---|---|---|
+| `cmd_input_task()` | `main/main.c` | Canal local USB/Serial opcional |
+| `parse_command()` | `main/main.c` | Parser exclusivo de la consola local |
+| `preset_cmd_task()` | `main/main.c` | Movimiento automático fijo de prueba |
+| `PRESET_STEPS_PER_MOVE`, `PRESET_DIR`, `PRESET_MOVE_COUNT` | `main/main.c` | Configuración del preset de prueba |
+| Bloque `mqtt_task` comentado | final de `main/main.c` | Boceto no activo |
+| `python_client.py` | raíz | Cliente de referencia WebSocket, no firmware |
+
+No son legacy `alpaca.c`, `ws_server.c`, `wifi_init.c`, `focuser_handler.c`, `tmc2209.c`, los drivers de sensores, `motor_cmd_queue` ni `motor_task`: forman parte de rutas activas.
 
 ## Trabajo Completado ✓
 
 ### 1. Reconstrucción de Archivos MD Componentes
 
-Se han creado/actualizado **8 archivos markdown** con documentación completa de cada módulo:
+Se han creado/actualizado **9 archivos markdown** con documentación completa de cada módulo:
 
 | Archivo | Ubicación | Estado |
 |---------|-----------|--------|
@@ -19,6 +47,7 @@ Se han creado/actualizado **8 archivos markdown** con documentación completa de
 | focuser_handler.md | `/components/focuser_handler/` | ✓ State machine, sincronización, funciones getter/setter |
 | wifi_init.md | `/components/wifi_init/` | ✓ Conexión WiFi, reintentos, event groups |
 | ws_server.md | `/components/ws_server/` | ✓ WebSocket, broadcast asincrónico, clientes múltiples |
+| alpaca.md | `/components/alpaca/` | ✓ ASCOM Alpaca, GET, Move y Halt |
 
 ### 2. Documentación de Arquitectura Global
 
@@ -75,6 +104,7 @@ Lectura Recomendada:
    ├─ focuser_handler.md (state)
    ├─ wifi_init.md (red)
    └─ ws_server.md (websocket)
+   └─ alpaca.md (ASCOM Alpaca)
 ```
 
 ## Contenido de Cada MD
@@ -181,7 +211,7 @@ Lectura Recomendada:
 8. **Comandos y Protocolos**
    - USB Serial format
    - WebSocket JSON
-   - Alpaca HTTP (futuro)
+   - Alpaca HTTP activo (management, GET, Move y Halt)
 
 9. **Configuración Hardware**
    - Pines TMC2209, I2C, CH224K, LEDs

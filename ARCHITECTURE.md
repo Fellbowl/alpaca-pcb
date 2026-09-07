@@ -8,10 +8,10 @@ Este archivo es una **guía de navegación** de la arquitectura del sistema. Par
 
 ```
 CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
-├─ cmd_input_task (USB/Serial)      ├─ motor_task (STEP/DIR generation)
+├─ cmd_input_task (USB/Serial, opt.)├─ motor_task (STEP/DIR generation)
 ├─ i2c_sensors_task (AS5600/AHT21B) │  └─ (aislado, tiempo real)
 ├─ power_monitor_task (CH224K)       │
-├─ preset_cmd_task                   │
+├─ preset_cmd_task (legacy test)     │
 ├─ ws_telemetry_task                 │
 └─ WiFi/BT stack (Espressif)         └─ (sin interference)
 ```
@@ -25,10 +25,10 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 | Task | Core | Prioridad | Función | Stack | Documentación |
 |------|------|-----------|---------|-------|---|
 | motor_task | 1 | 10 (alta) | Genera STEP/DIR al TMC2209 | 4KB | — |
-| cmd_input_task | 0 | 5 | Lee USB/Serial, parsea `steps,dir` | 4KB | — |
+| cmd_input_task | 0 | 5 | Canal local opcional: lee USB/Serial y parsea `steps,dir` | 4KB | — |
 | i2c_sensors_task | 0 | 6 | Lee AS5600 (ángulo) y AHT21B (clima) cada 200ms | 4KB | — |
 | power_monitor_task | 0 | 1 (baja) | Monitorea CH224K, libera `power_good_sem` | 4KB | — |
-| preset_cmd_task | 0 | 3 | Encola comandos predefinidos | 4KB | — |
+| preset_cmd_task | 0 | 4 | Movimiento de prueba; termina después de encolar | 2KB | — |
 | ws_telemetry_task | 0 | 3 | Broadcast JSON cada 5s | 4KB | — |
 
 ## Protocolos y Comunicación
@@ -48,7 +48,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 - **Documentación**: [as5600.md](components/as5600/as5600.md), [aht21b.md](components/aht21b/aht21b.md)
 
 ### Alimentación (CH224K)
-- **Voltaje selectivo**: 5V, 9V, 12V, 15V via USB-C PD
+- **Voltaje selectivo**: 5V, 9V, 12V, 15V y 20V via USB-C PD; el firmware selecciona 20V en `power_monitor_task`
 - **GPIOs**: CFG1/CFG2/CFG3 para selección, PG para Power Good
 - **ADC**: Lectura de voltaje de salida (opcional)
 - **Documentación**: [ch224k.md](components/ch224k/ch224k.md)
@@ -57,8 +57,8 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 - **WiFi**: Station mode, SSID/password configurado en main.c
 - **WebSocket**: `ws://<IP>:80/ws`, máximo 4 clientes
 - **Telemetría**: JSON broadcast cada 5s
-- **Alpaca**: HTTP en puerto 11111 (futuro)
-- **Documentación**: [wifi_init.md](components/wifi_init/wifi_init.md), [ws_server.md](components/ws_server/ws_server.md)
+- **Alpaca**: HTTP en puerto 11111, management + GET de focuser + PUT Move/Halt
+- **Documentación**: [wifi_init.md](components/wifi_init/wifi_init.md), [ws_server.md](components/ws_server/ws_server.md), [alpaca.md](components/alpaca/alpaca.md)
 
 ## Flujo de Datos: Comando → Motor → Posición
 
@@ -87,7 +87,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
         ↓
   position_usteps += 2000
         ↓
-  ┌─ Local read ────┐  ┌─ WebSocket broadcast ──┐
+      ┌─ Alpaca GET ────┐  ┌─ WebSocket broadcast ──┐
   │ get_position()  │  │ telemetry JSON         │
   └─────────────────┘  └────────────────────────┘
 ```
@@ -97,7 +97,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 ### motor_cmd_queue (FreeRTOS Queue)
 - **Longitud**: 4 elementos
 - **Tipo**: motor_cmd_t (steps, dir)
-- **Productor**: cmd_input_task, preset_cmd_task, ws_on_message, focuser_handler_move_to
+- **Productor**: `cmd_input_task` (legacy), `preset_cmd_task` (legacy), `ws_on_message`, `focuser_handler_move_to()` desde Alpaca
 - **Consumidor**: motor_task
 - **Propósito**: Desacoplar origen de comandos de ejecución
 
@@ -111,7 +111,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 ### focuser_handler (Mutex + atomic_bool)
 - **Mutex**: Protege estado mutable (position, temperature, is_moving)
 - **atomic_bool**: Flag de halt separado (rápido, sin deadlock)
-- **Readers**: ws_server (get_* functions), Alpaca HTTP (futuro)
+- **Readers**: ws_server telemetry y Alpaca HTTP
 - **Writers**: motor_task (position), i2c_sensors_task (temperature)
 
 ## Estado Focuser
@@ -147,7 +147,7 @@ focuser_state_t {
    - cmd_input_task (Core 0)
    - i2c_sensors_task (Core 0)
    - power_monitor_task (Core 0) - libera power_good_sem cuando PG=OK
-   - preset_cmd_task (Core 0)
+      - preset_cmd_task (Core 0, legacy de prueba)
    - ws_telemetry_task (Core 0) - si WiFi OK
 
 ## Notas de Diseño Críticas
@@ -167,20 +167,24 @@ Cada componente es autocontenido:
 - **Sensores I2C**: Marcan `ready=false` si fallan → sistema continúa
 - **WiFi/WebSocket**: Fallos no paran motor → solo pierde control remoto
 
-### 3. SIN i2c_master_probe()
+### 3. Un solo bus I2C
+
+`i2c_sensors_task` crea un único bus `I2C_NUM_0` en SDA GPIO8/SCL GPIO9 y registra AS5600 y AHT21B sobre él. Las lecturas se hacen secuencialmente en la misma task. `I2C_NUM_1` no se utiliza actualmente.
+
+### 4. SIN i2c_master_probe()
 Porque genera falsos timeouts en esta versión de ESP-IDF.
 Usa transacciones reales como probe:
 - AS5600: Lee STATUS
 - AHT21B: Lee STATUS o asegura calibración
 
-### 4. Reintentos Condicionados
+### 5. Reintentos Condicionados
 Reintentos viven en orquestador (main.c), no en drivers:
 - Drivers: Retornan error/OK
 - main.c: Cuenta fallos, reintenta con delay, marca como no disponible
 
 ## Comandos y Protocolos
 
-### USB/Serial Console
+### USB/Serial Console (legacy opcional)
 ```
 <pasos>,<dir>\n
 Ejemplos:
@@ -217,10 +221,11 @@ Max: 204,800 micropasos por comando
 }
 ```
 
-### Alpaca HTTP (Step 3/5, futuro)
+### Alpaca HTTP (activo)
 ```
-GET http://<IP>:11111/alpaca/v1/focuser/0/position
-PUT http://<IP>:11111/alpaca/v1/focuser/0/move
+GET http://<IP>:11111/api/v1/focuser/0/position
+PUT http://<IP>:11111/api/v1/focuser/0/move
+PUT http://<IP>:11111/api/v1/focuser/0/halt
 ```
 
 ## Configuración de Hardware (main.c)
@@ -274,12 +279,27 @@ Motor Status LED = GPIO12  (ON si motor_task vivo)
 - **[focuser_handler.md](components/focuser_handler/focuser_handler.md)** — State machine
 - **[wifi_init.md](components/wifi_init/wifi_init.md)** — WiFi
 - **[ws_server.md](components/ws_server/ws_server.md)** — WebSocket
+- **[alpaca.md](components/alpaca/alpaca.md)** — ASCOM Alpaca
 
-## Pasos Próximos (Roadmap)
+## Estado y Próximos Pasos
 
-- **Step 3/5**: Alpaca Focuser (management endpoints) ✓ En código
-- **Step 4/5**: Alpaca Focuser (control endpoints, move_to integration)
-- **Step 5/5**: Rate limiting, estadísticas, homing automático
+- Alpaca management: implementado.
+- Alpaca GET del focuser: implementado.
+- Alpaca PUT `move`/`halt`: implementado.
+- Próximos pasos opcionales: rate limiting, estadísticas, homing automático y retirar canales legacy si ya no se necesitan.
+
+## Código Legacy u Opcional
+
+No son necesarios para operar mediante Alpaca o WebSocket:
+
+| Elemento | Ubicación | Uso actual |
+|---|---|---|
+| `cmd_input_task()` | `main/main.c` | Control local por USB Serial/JTAG |
+| `parse_command()` | `main/main.c` | Parser exclusivo de la consola local |
+| `preset_cmd_task()` y `PRESET_*` | `main/main.c` | Movimiento automático fijo de prueba |
+| Bloque `mqtt_task` comentado | final de `main/main.c` | Punto de extensión no activo |
+
+Estos elementos pueden retirarse después de validar que el arranque no necesita consola local ni movimiento de prueba. No son legacy `motor_cmd_queue`, `motor_task`, `focuser_handler`, `ws_server` ni `alpaca`: forman parte de las rutas activas.
 
 ## Troubleshooting Rápido
 
