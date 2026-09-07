@@ -8,7 +8,7 @@ Este archivo es una **guía de navegación** de la arquitectura del sistema. Par
 
 ```
 CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
-├─ cmd_input_task (USB/Serial, opt.)├─ motor_task (STEP/DIR generation)
+├─ preset_cmd_task (legacy test)    ├─ motor_task (STEP/DIR generation)
 ├─ i2c_sensors_task (AS5600/AHT21B) │  └─ (aislado, tiempo real)
 ├─ power_monitor_task (CH224K)       │
 ├─ preset_cmd_task (legacy test)     │
@@ -25,7 +25,6 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 | Task | Core | Prioridad | Función | Stack | Documentación |
 |------|------|-----------|---------|-------|---|
 | motor_task | 1 | 10 (alta) | Genera STEP/DIR al TMC2209 | 4KB | — |
-| cmd_input_task | 0 | 5 | Canal local opcional: lee USB/Serial y parsea `steps,dir` | 4KB | — |
 | i2c_sensors_task | 0 | 6 | Lee AS5600 (ángulo) y AHT21B (clima) cada 200ms | 4KB | — |
 | power_monitor_task | 0 | 1 (baja) | Monitorea CH224K, libera `power_good_sem` | 4KB | — |
 | preset_cmd_task | 0 | 4 | Movimiento de prueba; termina después de encolar | 2KB | — |
@@ -67,8 +66,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 │ "2000,1"      │
 └───────────────┘
         ↓
-  cmd_input_task
-  parsea steps, dir
+      productor de comandos
         ↓
   motor_cmd_t {
     .steps = 2000
@@ -97,7 +95,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 ### motor_cmd_queue (FreeRTOS Queue)
 - **Longitud**: 4 elementos
 - **Tipo**: motor_cmd_t (steps, dir)
-- **Productor**: `cmd_input_task` (legacy), `preset_cmd_task` (legacy), `ws_on_message`, `focuser_handler_move_to()` desde Alpaca
+- **Productor**: `preset_cmd_task` (legacy), `ws_on_message`, `focuser_handler_move_to()` desde Alpaca
 - **Consumidor**: motor_task
 - **Propósito**: Desacoplar origen de comandos de ejecución
 
@@ -144,7 +142,6 @@ focuser_state_t {
    - Si falla → continúa sin control remoto
 6. **Crea tasks en orden**:
    - motor_task (Core 1) - se bloquea en power_good_sem
-   - cmd_input_task (Core 0)
    - i2c_sensors_task (Core 0)
    - power_monitor_task (Core 0) - libera power_good_sem cuando PG=OK
       - preset_cmd_task (Core 0, legacy de prueba)
@@ -295,8 +292,6 @@ No son necesarios para operar mediante Alpaca o WebSocket:
 
 | Elemento | Ubicación | Uso actual |
 |---|---|---|
-| `cmd_input_task()` | `main/main.c` | Control local por USB Serial/JTAG |
-| `parse_command()` | `main/main.c` | Parser exclusivo de la consola local |
 | `preset_cmd_task()` y `PRESET_*` | `main/main.c` | Movimiento automático fijo de prueba |
 | Bloque `mqtt_task` comentado | final de `main/main.c` | Punto de extensión no activo |
 

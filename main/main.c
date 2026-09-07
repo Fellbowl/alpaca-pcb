@@ -14,8 +14,8 @@
  *
  *   Core 0 (PRO_CPU)                         Core 1 (APP_CPU)
  *   -----------------                        -----------------
- *   cmd_input_task  ---\                     motor_task
- *   (USB Serial, hoy)   \                    (dueña exclusiva del UART1
+ *   preset_cmd_task ---\                    motor_task
+ *   (comandos internos) \                   (dueña exclusiva del UART1
  *                         > motor_cmd_queue ->  hacia el TMC2209, via
  *   mqtt_task (futuro)   /   (FreeRTOS)          el modulo tmc2209.c)
  *   i2c_sensors_task    /
@@ -30,7 +30,7 @@
  *     motor_task va pinneada al core 1 en solitario.
  *
  *   - motor_cmd_queue es el UNICO contrato entre "de donde viene el comando"
- *     y "como se ejecuta". cmd_input_task hoy solo sabe leer texto y armar
+ *     y "como se ejecuta". Los productores activos arman
  *     un motor_cmd_t; mqtt_task manana hara lo mismo con el payload de un
  *     topico MQTT. motor_task nunca cambia.
  *
@@ -163,7 +163,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <ctype.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -242,8 +241,6 @@
 #define I2C_SENSOR_POLL_PERIOD_MS  200
 
 /* ---- Consola ---- */
-#define CMD_LINE_MAX 64
-
 /* ---- Indicadores de estado ---- */
 #define PIN_WS_STATUS_LED      10
 #define PIN_MOTOR_STATUS_LED   12
@@ -297,7 +294,8 @@
 #define ALPACA_DEVICE_NAME         "PUJ Focuser"
 #define ALPACA_DEVICE_DESCRIPTION  "Focuser controlado por TMC2209 + AS5600 + AHT21B"
 #define ALPACA_DRIVER_INFO         "Javeriana G5 - Control Electronico de Enfoque Automatico"
-#define ALPACA_DRIVER_VERSION      "0.1.0"
+#define ALPACA_DRIVER_VERSION      "0.1"
+#define ALPACA_DEVICE_UNIQUE_ID    "puj-focuser-esp32-001"
 
 
 /* ============================================================================
@@ -332,7 +330,6 @@ static aht21b_t  climate;
 static i2c_master_bus_handle_t i2c_sensors_bus = NULL; 
 
 static TaskHandle_t motor_task_handle = NULL;
-static TaskHandle_t cmd_input_task_handle = NULL;
 static TaskHandle_t i2c_sensors_task_handle = NULL;
 
 static ch224k_t power_pd;
@@ -352,15 +349,11 @@ static esp_err_t i2c_retry_detect(esp_err_t (*probe_fn)(void *ctx), void *ctx,
 static esp_err_t as5600_probe(void *ctx);
 static esp_err_t aht21_probe(void *ctx);
 
-/* -- Parseo de comandos de consola -- */
-static bool parse_command(const char *line, uint32_t *steps_out, int *dir_out);
-
 /* -- Manejo de comandos de WebSocket -- */
 static void ws_on_message(const char *payload, size_t len);
 
 /* -- Tasks de FreeRTOS -- */
 static void motor_task(void *arg);
-static void cmd_input_task(void *arg);
 static void i2c_sensors_task(void *arg);
 static void power_monitor_task(void *arg);
 static void preset_cmd_task(void *arg);
@@ -476,6 +469,7 @@ void app_main(void)
             .device_description   = ALPACA_DEVICE_DESCRIPTION,
             .driver_info          = ALPACA_DRIVER_INFO,
             .driver_version       = ALPACA_DRIVER_VERSION,
+            .device_unique_id     = ALPACA_DEVICE_UNIQUE_ID,
             .task_priority        = ALPACA_TASK_PRIORITY,
             .task_core_id         = ALPACA_TASK_CORE_ID,
             .task_stack_words     = ALPACA_TASK_STACK_WORDS,
@@ -490,12 +484,6 @@ void app_main(void)
     created = xTaskCreatePinnedToCore(motor_task, "motor_task", 4096, NULL, 10, &motor_task_handle, 1);
     if (created != pdPASS) {
         ESP_LOGE(TAG, "No se pudo crear motor_task");
-    }
-
-    /* cmd_input_task: core 0, prioridad normal (solo I/O de texto) */
-    created = xTaskCreatePinnedToCore(cmd_input_task, "cmd_input_task", 4096, NULL, 5, &cmd_input_task_handle, 0);
-    if (created != pdPASS) {
-        ESP_LOGE(TAG, "No se pudo crear cmd_input_task");
     }
 
     /* i2c_sensors_task: AS5600 + AHT21B */
@@ -565,63 +553,9 @@ static esp_err_t aht21_probe(void *ctx)
     return aht21b_ensure_calibrated((aht21b_t *)ctx);
 }
 
-/* ============================================================================
- *  IMPLEMENTACION - PARSEO DE COMANDOS DE CONSOLA
- * ============================================================================ */
-
-/* Parsea "pasos,direccion" desde una linea; valida y entrega pasos y direccion. */
-static bool parse_command(const char *line, uint32_t *steps_out, int *dir_out)
-{
-    char *endptr = NULL;
-
-    while (isspace((unsigned char)*line)) {
-        line++;
-    }
-
-    long steps = strtol(line, &endptr, 10);
-    if (endptr == line || steps < 0) {
-        return false;
-    }
-
-    const char *p = endptr;
-    while (isspace((unsigned char)*p)) {
-        p++;
-    }
-    if (*p != ',') {
-        return false;
-    }
-    p++;
-    while (isspace((unsigned char)*p)) {
-        p++;
-    }
-
-    char *endptr2 = NULL;
-    long dir = strtol(p, &endptr2, 10);
-    if (endptr2 == p || (dir != 0 && dir != 1)) {
-        return false;
-    }
-
-    while (isspace((unsigned char)*endptr2)) {
-        endptr2++;
-    }
-    if (*endptr2 != '\0') {
-        return false;
-    }
-
-    if ((uint32_t)steps > MAX_STEPS_PER_COMMAND) {
-        ESP_LOGW(TAG, "Comando rechazado: %ld pasos supera el limite de cordura (%u).",
-                 steps, (unsigned)MAX_STEPS_PER_COMMAND);
-        return false;
-    }
-
-    *steps_out = (uint32_t)steps;
-    *dir_out = (int)dir;
-    return true;
-}
-
 /* Invocado DESDE la task del httpd (ver nota de threading en
  * ws_server.h) cada vez que llega un mensaje de texto por WS. Traduce
- * JSON -> motor_cmd_t y lo encola exactamente igual que cmd_input_task,
+ * JSON -> motor_cmd_t y lo encola directamente en la cola compartida,
  * reutilizando el mismo contrato (motor_cmd_queue). Formato esperado:
  *   {"cmd":"move","steps":51200,"dir":0}
  *
@@ -670,7 +604,7 @@ static void ws_on_message(const char *payload, size_t len)
 
     motor_cmd_t cmd = { .steps = (uint32_t)steps, .dir = dir };
 
-    /* Mismo timeout corto que cmd_input_task: si motor_task esta
+    /* Mismo timeout corto: si motor_task esta
      * ocupada, se informa al cliente en vez de bloquear la task del
      * httpd (bloquearla ahi afectaria a TODOS los clientes WS). */
     if (xQueueSend(motor_cmd_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -747,8 +681,7 @@ static void motor_task(void *arg)
 
     /* No se usa vTaskDelete(NULL) ante un fallo de arranque: en vez de
      * matar la task para siempre, se reintenta indefinidamente con
-     * backoff de 1s (logueando cada 10 intentos). cmd_input_task sigue
-     * viva mientras tanto y descarta comandos con "motor ocupado", pero
+    * backoff de 1s (logueando cada 10 intentos).
      * en cuanto el driver responda, motor_task se recupera sola. */
     bool driver_ready = false;
     uint32_t attempt = 0;
@@ -840,68 +773,6 @@ static void motor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(50)); /* asentamiento antes de leer estado */
         tmc2209_check_status(&motor, "tras comando");
         printf("OK %lu,%d (ejecutado=%ld)\n", (unsigned long)cmd.steps, cmd.dir, (long)executed_signed);
-    }
-}
-
-/* ---------------------------------------------------------------------------
- *  CMD_INPUT_TASK - Core 0
- *  Solo sabe leer texto de la consola USB Serial/JTAG y traducirlo a un
- *  motor_cmd_t. No toca el driver del motor directamente: todo pasa por
- *  motor_cmd_queue. Este es el patron a copiar para mqtt_task/tcp_task el
- *  dia que se agregue comunicacion inalambrica.
- * --------------------------------------------------------------------------- */
-static void cmd_input_task(void *arg)
-{
-    (void)arg;
-
-    /* Nada de uart_driver_install aqui: con la consola en modo USB
-     * Serial/JTAG, ESP-IDF ya deja stdin/stdout conectados a ella desde
-     * el arranque (componente esp_console / usb_serial_jtag_vfs). fgets()
-     * bloquea la task hasta que llega un '\n'. */
-
-    printf("\n--- Listo. Envia comandos como: pasos,direccion  (ej: 2000,1) ---\n\n");
-    ESP_LOGI(TAG, "[cmd_input_task] Stack libre minimo tras inicializacion: %u words.",
-             (unsigned)uxTaskGetStackHighWaterMark(NULL));
-
-    char line[CMD_LINE_MAX];
-
-    while (true) {
-        if (fgets(line, sizeof(line), stdin) == NULL) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-            line[--len] = '\0';
-        }
-        if (len == 0) {
-            continue;
-        }
-
-        uint32_t steps = 0;
-        int dir = 0;
-
-        if (!parse_command(line, &steps, &dir)) {
-            printf("ERR formato invalido ('%s'). Usa: pasos,direccion  (ej: 2000,1)\n", line);
-            continue;
-        }
-
-        if (steps == 0) {
-            printf("OK 0 pasos, no hay movimiento.\n");
-            continue;
-        }
-
-        motor_cmd_t cmd = { .steps = steps, .dir = dir };
-
-        /* Timeout corto: si motor_task esta a la mitad de un giro largo,
-         * el comando espera aqui en vez de bloquear la lectura de consola
-         * indefinidamente. Ajusta el timeout o el tamaño de la queue
-         * segun que tan "en cola" quieras que se comporten comandos
-         * rapidos seguidos. */
-        if (xQueueSend(motor_cmd_queue, &cmd, pdMS_TO_TICKS(100)) != pdTRUE) {
-            printf("ERR motor ocupado, comando descartado.\n");
-        }
     }
 }
 
@@ -1108,10 +979,10 @@ static void power_monitor_task(void *arg)
 
 /* ---------------------------------------------------------------------------
  *  PRESET_CMD_TASK - Core 0
- *  Sustituto temporal de cmd_input_task mientras no haya acceso a UART
+ *  Movimiento interno de prueba mientras no haya acceso a UART
  *  (USB-C ocupado como fuente PD, no como canal de datos). Encola N
  *  movimientos fijos y luego se autodestruye -- no compite con
- *  cmd_input_task por la consola, solo por espacio en motor_cmd_queue,
+ *  la consola, solo por espacio en motor_cmd_queue,
  *  que es exactamente el contrato que ya existia.
  * --------------------------------------------------------------------------- */
 static void preset_cmd_task(void *arg)
@@ -1125,8 +996,7 @@ static void preset_cmd_task(void *arg)
     for (int i = 0; i < PRESET_MOVE_COUNT; i++) {
         motor_cmd_t cmd = { .steps = PRESET_STEPS_PER_MOVE, .dir = PRESET_DIR };
 
-        /* portMAX_DELAY a proposito: a diferencia de cmd_input_task (que
-         * usa timeout corto para no bloquear la lectura de consola),
+        /* portMAX_DELAY a proposito: como no hay otra tarea de consola,
          * aqui no hay nada mas que hacer salvo esperar a que motor_task
          * desocupe espacio en la queue. Encolar los 5 sin descartar
          * ninguno es el objetivo. */
@@ -1184,7 +1054,7 @@ static void ws_telemetry_task(void *arg)
  *      // 1. esp_mqtt_client_start(), suscribirse a un topico como
  *      //    "motor/cmd" con payload "pasos,direccion" o JSON.
  *      // 2. En el handler de MQTT_EVENT_DATA, parsear el payload igual
- *      //    que parse_command() y armar un motor_cmd_t.
+ *      //    que armar un motor_cmd_t.
  *      // 3. xQueueSend(motor_cmd_queue, &cmd, pdMS_TO_TICKS(100));
  *      //
  *      // El callback de esp-mqtt corre en la task interna del cliente

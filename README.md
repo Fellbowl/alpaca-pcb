@@ -53,7 +53,6 @@ flowchart TD
     G --> H
     H --> I[power_monitor_task: initialize CH224K]
     H --> J[motor_task on Core 1]
-   H --> K[cmd_input_task on Core 0 - optional legacy]
     H --> L[i2c_sensors_task on Core 0]
    H --> M[preset_cmd_task - temporary legacy]
     I --> N{Power Good?}

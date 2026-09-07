@@ -104,7 +104,6 @@ FreeRTOS EventGroup con dos bits:
 ### En main.c
 ```
 +-------------------+
-| cmd_input_task    |
 | mqtt_task         | -> motor_cmd_queue
 | i2c_sensors_task  |
 +-------------------+

@@ -22,8 +22,6 @@ Estos elementos siguen compilándose o están presentes como soporte, pero no so
 
 | Elemento | Ubicación | Clasificación |
 |---|---|---|
-| `cmd_input_task()` | `main/main.c` | Canal local USB/Serial opcional |
-| `parse_command()` | `main/main.c` | Parser exclusivo de la consola local |
 | `preset_cmd_task()` | `main/main.c` | Movimiento automático fijo de prueba |
 | `PRESET_STEPS_PER_MOVE`, `PRESET_DIR`, `PRESET_MOVE_COUNT` | `main/main.c` | Configuración del preset de prueba |
 | Bloque `mqtt_task` comentado | final de `main/main.c` | Boceto no activo |

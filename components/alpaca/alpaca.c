@@ -49,12 +49,15 @@
 #include <strings.h>
 #include <stdlib.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include "alpaca.h"
 
 #include "freertos/task.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "lwip/sockets.h"
+#include "lwip/inet.h"
 #include "cJSON.h"
 #include "focuser_handler.h"
 
@@ -70,6 +73,12 @@ static const char *TAG = "ALPACA";
  * arriba y estable -- solo diagnostico, no afecta el comportamiento del
  * servidor. */
 #define ALPACA_HEAP_LOG_PERIOD_MS  30000
+
+/* Discovery Alpaca usa este puerto fijo, conocido de antemano por los
+ * clientes. La respuesta anuncia el puerto HTTP configurado del servidor. */
+#define ALPACA_DISCOVERY_PORT      32227
+#define ALPACA_DISCOVERY_MESSAGE   "alpacadiscovery1"
+#define ALPACA_DISCOVERY_RESPONSE_MAX  32
 
 /* Numero de dispositivo Alpaca para el focuser, fijo en 0 porque este
  * firmware controla UN SOLO focuser -- no hay necesidad de parsear el
@@ -131,6 +140,7 @@ static char alpaca_device_name[ALPACA_STR_FIELD_MAX];
 static char alpaca_device_description[ALPACA_STR_FIELD_MAX];
 static char alpaca_driver_info[ALPACA_STR_FIELD_MAX];
 static char alpaca_driver_version[ALPACA_STR_FIELD_MAX];
+static char alpaca_device_unique_id[ALPACA_STR_FIELD_MAX];
 
 /* Connected: bandera de PROTOCOLO, no de estado fisico del focuser (ver
  * nota de diseño al inicio del archivo). atomic_bool por el mismo motivo
@@ -145,8 +155,11 @@ static atomic_bool alpaca_connected = true;
  * ============================================================================ */
 
 static void alpaca_http_task(void *arg);
+static void alpaca_discovery_task(void *arg);
 static esp_err_t alpaca_apiversions_handler(httpd_req_t *req);
 static esp_err_t alpaca_description_handler(httpd_req_t *req);
+static esp_err_t alpaca_configureddevices_handler(httpd_req_t *req);
+static esp_err_t alpaca_configureddevices_handler(httpd_req_t *req);
 
 /* -- Paso 4: lecturas del Focuser -- */
 static esp_err_t alpaca_focuser_connected_handler(httpd_req_t *req);
@@ -245,6 +258,29 @@ esp_err_t alpaca_start(const alpaca_config_t *cfg)
         return ESP_FAIL;
     }
 
+    uint16_t *discovery_port_arg = malloc(sizeof(uint16_t));
+    if (discovery_port_arg == NULL) {
+        ESP_LOGE(TAG, "alpaca_start: no se pudo reservar memoria para discovery UDP; "
+                      "el servidor HTTP continuara funcionando.");
+        return ESP_OK;
+    }
+    *discovery_port_arg = cfg->port;
+
+    created = xTaskCreatePinnedToCore(
+        alpaca_discovery_task,
+        "alpaca_discovery_task",
+        cfg->task_stack_words,
+        discovery_port_arg,
+        cfg->task_priority,
+        NULL,
+        cfg->task_core_id);
+
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "alpaca_start: no se pudo crear alpaca_discovery_task; "
+                      "el servidor HTTP continuara funcionando.");
+        free(discovery_port_arg);
+    }
+
     return ESP_OK;
 }
 
@@ -288,6 +324,14 @@ static void alpaca_http_task(void *arg)
         .user_ctx = NULL,
     };
     httpd_register_uri_handler(alpaca_httpd, &description_uri);
+
+    httpd_uri_t configureddevices_uri = {
+        .uri = "/management/v1/configureddevices",
+        .method = HTTP_GET,
+        .handler = alpaca_configureddevices_handler,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(alpaca_httpd, &configureddevices_uri);
 
     /* ---- Rutas del Focuser: lecturas (Paso 4), comandos (Paso 5) y
      * Common Device Interface (metadata + stubs deprecados). Tabla
@@ -352,6 +396,76 @@ static void alpaca_http_task(void *arg)
     }
 }
 
+static void alpaca_discovery_task(void *arg)
+{
+    uint16_t alpaca_port = *(uint16_t *)arg;
+    free(arg);
+
+    int discovery_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (discovery_socket < 0) {
+        ESP_LOGE(TAG, "[alpaca_discovery_task] No se pudo crear socket UDP.");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    struct sockaddr_in discovery_address = {
+        .sin_family = AF_INET,
+        .sin_port = htons(ALPACA_DISCOVERY_PORT),
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+    };
+    if (bind(discovery_socket, (struct sockaddr *)&discovery_address,
+             sizeof(discovery_address)) < 0) {
+        ESP_LOGE(TAG, "[alpaca_discovery_task] No se pudo enlazar UDP al puerto %u.",
+                 (unsigned)ALPACA_DISCOVERY_PORT);
+        close(discovery_socket);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "[alpaca_discovery_task] Discovery UDP escuchando en puerto %u; "
+                  "respuesta anunciara Alpaca TCP en %u.",
+             (unsigned)ALPACA_DISCOVERY_PORT, (unsigned)alpaca_port);
+
+    char received_message[sizeof(ALPACA_DISCOVERY_MESSAGE)];
+    char response[ALPACA_DISCOVERY_RESPONSE_MAX];
+    const size_t expected_length = sizeof(ALPACA_DISCOVERY_MESSAGE) - 1;
+
+    while (true) {
+        struct sockaddr_in source_address;
+        socklen_t source_address_length = sizeof(source_address);
+        ssize_t received_length = recvfrom(
+            discovery_socket,
+            received_message,
+            sizeof(received_message),
+            0,
+            (struct sockaddr *)&source_address,
+            &source_address_length);
+
+        if (received_length < 0) {
+            ESP_LOGE(TAG, "[alpaca_discovery_task] Error recibiendo datagrama UDP.");
+            continue;
+        }
+
+        if ((size_t)received_length != expected_length ||
+            memcmp(received_message, ALPACA_DISCOVERY_MESSAGE, expected_length) != 0) {
+            continue;
+        }
+
+        int response_length = snprintf(response, sizeof(response),
+                                       "{\"AlpacaPort\":%u}",
+                                       (unsigned)alpaca_port);
+        if (response_length < 0 || (size_t)response_length >= sizeof(response)) {
+            ESP_LOGE(TAG, "[alpaca_discovery_task] No se pudo construir la respuesta.");
+            continue;
+        }
+
+        if (sendto(discovery_socket, response, (size_t)response_length, 0,
+                   (struct sockaddr *)&source_address, source_address_length) < 0) {
+            ESP_LOGE(TAG, "[alpaca_discovery_task] Error enviando respuesta UDP.");
+        }
+    }
+}
+
 /* ============================================================================
  *  IMPLEMENTACION - HANDLERS DE /management
  * ============================================================================ */
@@ -361,8 +475,10 @@ static esp_err_t alpaca_apiversions_handler(httpd_req_t *req)
     cJSON *versions = cJSON_CreateArray();
     cJSON_AddItemToArray(versions, cJSON_CreateNumber(1));
     cJSON_AddItemToObject(root, "Value", versions);
-    cJSON_AddNumberToObject(root, "ClientTransactionID", 0);
-    cJSON_AddNumberToObject(root, "ServerTransactionID", 0);
+    cJSON_AddNumberToObject(root, "ClientTransactionID", alpaca_get_client_transaction_id(req));
+    cJSON_AddNumberToObject(root, "ServerTransactionID", alpaca_next_server_transaction_id());
+    cJSON_AddNumberToObject(root, "ErrorNumber", 0);
+    cJSON_AddStringToObject(root, "ErrorMessage", "");
 
     char *json_str = cJSON_PrintUnformatted(root);
     httpd_resp_set_type(req, "application/json");
@@ -382,8 +498,37 @@ static esp_err_t alpaca_description_handler(httpd_req_t *req)
     cJSON_AddStringToObject(value, "ManufacturerVersion", alpaca_manufacturer_version);
     cJSON_AddStringToObject(value, "Location", alpaca_location);
     cJSON_AddItemToObject(root, "Value", value);
-    cJSON_AddNumberToObject(root, "ClientTransactionID", 0);
-    cJSON_AddNumberToObject(root, "ServerTransactionID", 0);
+    cJSON_AddNumberToObject(root, "ClientTransactionID", alpaca_get_client_transaction_id(req));
+    cJSON_AddNumberToObject(root, "ServerTransactionID", alpaca_next_server_transaction_id());
+    cJSON_AddNumberToObject(root, "ErrorNumber", 0);
+    cJSON_AddStringToObject(root, "ErrorMessage", "");
+
+    char *json_str = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t ret = httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+    return ret;
+}
+
+static esp_err_t alpaca_configureddevices_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *devices = cJSON_CreateArray();
+    cJSON *device = cJSON_CreateObject();
+
+    cJSON_AddStringToObject(device, "DeviceName", alpaca_device_name);
+    cJSON_AddStringToObject(device, "DeviceType", "Focuser");
+    cJSON_AddNumberToObject(device, "DeviceNumber", 0);
+    cJSON_AddStringToObject(device, "UniqueID", alpaca_device_unique_id);
+    cJSON_AddItemToArray(devices, device);
+
+    cJSON_AddItemToObject(root, "Value", devices);
+    cJSON_AddNumberToObject(root, "ClientTransactionID", alpaca_get_client_transaction_id(req));
+    cJSON_AddNumberToObject(root, "ServerTransactionID", alpaca_next_server_transaction_id());
+    cJSON_AddNumberToObject(root, "ErrorNumber", 0);
+    cJSON_AddStringToObject(root, "ErrorMessage", "");
 
     char *json_str = cJSON_PrintUnformatted(root);
     httpd_resp_set_type(req, "application/json");

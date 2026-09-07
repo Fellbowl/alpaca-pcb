@@ -34,6 +34,7 @@ static const char *TAG = "TMC2209";
 #define MICROSTEPS_FULL_1_256   256u
 #define FULL_STEPS_PER_REV      200u
 #define YIELD_EVERY_N_STEPS     500u   /* para no disparar el task watchdog */
+#define STEP_PULSE_HIGH_US      2u
 
 /* ============================================================================
  *  PROTOCOLO UART DE BAJO NIVEL (privado del modulo)
@@ -176,12 +177,19 @@ esp_err_t tmc2209_init(tmc2209_t *drv, const tmc2209_config_t *cfg)
     ESP_ERROR_CHECK(uart_set_pin(cfg->uart_port, cfg->pin_uart_tx, cfg->pin_uart_rx,
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
-    /* ---- Rampa: precalcular semiperiodos a partir de rev_per_sec_* ---- */
+    /* ---- Rampa: precalcular el intervalo entre pasos a partir de rev_per_sec_* ----
+     * Cada iteracion genera el pulso STEP completo y espera una sola vez
+     * antes del siguiente pulso, por lo que aqui debe usarse el periodo
+     * completo del paso, no un semiperiodo. */
     uint32_t steps_per_rev = FULL_STEPS_PER_REV * MICROSTEPS_FULL_1_256;
-    drv->half_period_start_us  = (uint32_t)(1000000.0 / (2.0 * cfg->rev_per_sec_start  * steps_per_rev));
-    drv->half_period_cruise_us = (uint32_t)(1000000.0 / (2.0 * cfg->rev_per_sec_cruise * steps_per_rev));
+    uint32_t start_period_us = (uint32_t)(1000000.0 / (cfg->rev_per_sec_start * steps_per_rev));
+    uint32_t cruise_period_us = (uint32_t)(1000000.0 / (cfg->rev_per_sec_cruise * steps_per_rev));
+    drv->half_period_start_us = (start_period_us > STEP_PULSE_HIGH_US)
+        ? start_period_us - STEP_PULSE_HIGH_US : 1;
+    drv->half_period_cruise_us = (cruise_period_us > STEP_PULSE_HIGH_US)
+        ? cruise_period_us - STEP_PULSE_HIGH_US : 1;
 
-    ESP_LOGI(TAG, "Velocidades: arranque=%lu us, crucero=%lu us (%lu micropasos/rev)",
+    ESP_LOGI(TAG, "Intervalos STEP: arranque=%lu us, crucero=%lu us (%lu micropasos/rev)",
              (unsigned long)drv->half_period_start_us, (unsigned long)drv->half_period_cruise_us,
              (unsigned long)steps_per_rev);
 

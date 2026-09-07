@@ -14,6 +14,8 @@ wifi_init_sta() -> ws_server_start() -> alpaca_start()
 
 El servidor escucha en el puerto configurado por `ALPACA_HTTP_PORT` (actualmente `11111`). Usa un segundo `ctrl_port` interno de HTTPD para coexistir con el servidor WebSocket del puerto 80.
 
+El discovery Alpaca IPv4 escucha en UDP `32227`, el puerto estandar conocido por los clientes. Solo responde al payload ASCII exacto `alpacadiscovery1`, con un JSON minimo como `{"AlpacaPort":11111}` enviado unicast al origen del datagrama. El discovery IPv6/multicast IPv6 no esta implementado.
+
 **Estado de implementación:** funcional en el alcance actualmente codificado, pero todavía no es una implementación completa del contrato ASCOM Alpaca Focuser ni está validada con un cliente Alpaca externo. Las rutas existentes permiten consultar el estado y ejecutar `Move`/`Halt`; quedan endpoints estándar por completar.
 
 ## Endpoints Implementados
@@ -24,6 +26,7 @@ El servidor escucha en el puerto configurado por `ALPACA_HTTP_PORT` (actualmente
 |---|---|---|
 | GET | `/management/apiversions` | Versiones de API disponibles |
 | GET | `/management/v1/description` | Nombre, fabricante, versión y ubicación |
+| GET | `/management/v1/configureddevices` | Dispositivos Alpaca expuestos por el servidor |
 
 ### Focuser
 
@@ -44,11 +47,10 @@ Base: `/api/v1/focuser/0`
 | PUT | `/move` | Solicita movimiento absoluto |
 | PUT | `/halt` | Solicita parada controlada |
 
-### Rutas Alpaca todavía faltantes
-
-- `PUT /api/v1/focuser/0/connected`.
-- `PUT /api/v1/focuser/0/tempcomp`.
-- Metadatos del dispositivo como `name`, `description`, `driverinfo`, `driverversion` e `interfaceversion`, si se requiere compatibilidad completa con clientes Alpaca.
+Las respuestas de Management y de los endpoints del dispositivo incluyen la envoltura
+estándar con `ClientTransactionID`, `ServerTransactionID`, `ErrorNumber` y
+`ErrorMessage`. `configureddevices` anuncia el focuser como `DeviceType: "Focuser"`,
+`DeviceNumber: 0` y un `UniqueID` estable.
 
 Los GET consultan el estado mediante funciones públicas de `focuser_handler`. El PUT `/move` llama a `focuser_handler_move_to()`, que valida el rango, calcula el delta y encola un `motor_cmd_t` relativo. El PUT `/halt` usa el flag atómico de parada, fuera de la cola normal.
 
@@ -77,8 +79,9 @@ No se usa JSON para leer los parámetros de `/move` o `/halt`.
 ## Arquitectura Interna
 
 - `alpaca_start()` copia los textos de configuración a buffers internos.
-- Crea `alpaca_http_task` con el puerto, prioridad, core y stack recibidos.
-- La task arranca HTTPD, registra 14 URI handlers y permanece viva para registrar heap periódicamente.
+- Crea `alpaca_http_task` y `alpaca_discovery_task` con el puerto, prioridad, core y stack recibidos.
+- La task HTTP arranca HTTPD, registra los URI handlers y permanece viva para registrar heap periódicamente.
+- La task de discovery permanece bloqueada en `recvfrom()` y descarta cualquier payload distinto de `alpacadiscovery1`.
 - `alpaca.c` incluye `focuser_handler.h`; `alpaca.h` mantiene una interfaz independiente y solo expone `alpaca_config_t`.
 - El dispositivo es fijo: `focuser/0`, porque el firmware controla un único focuser.
 

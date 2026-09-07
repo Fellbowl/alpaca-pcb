@@ -29,7 +29,7 @@
  *  httpd (no desde tu task de aplicacion). Si necesitas tocar estado
  *  compartido con otras tasks (como motor_cmd_queue), usa las primitivas
  *  normales de FreeRTOS (xQueueSend con timeout corto) -- exactamente
- *  igual que ya hace cmd_input_task hoy. No hagas trabajo lento ahi
+ *  igual que hacen los productores activos hoy. No hagas trabajo lento ahi
  *  (nada de vTaskDelay largos ni I2C/UART directo) porque bloquearia al
  *  httpd para todos los clientes.
  * ============================================================================

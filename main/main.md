@@ -7,7 +7,6 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 
 ### Distribución de Núcleos
 - **Core 0 (PRO_CPU)**: 
-  - `cmd_input_task` - Lee comandos por USB Serial/JTAG
   - `mqtt_task` (no implementada) - Punto de extensión futuro
   - `i2c_sensors_task` - Gestiona sensores en un bus I2C compartido
   - Reservado para stack WiFi/BT de Espressif
@@ -22,7 +21,7 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 
 2. **Sensores I2C en Core 0**: AS5600 y AHT21B se registran sobre el mismo bus físico creado por `i2c_sensors_task` (`I2C_NUM_0`, SDA GPIO8, SCL GPIO9). Las lecturas se ejecutan secuencialmente en la misma task, por lo que no hay carrera entre sensores y un bloqueo no afecta al Core 1.
 
-3. **Desacoplamiento mediante colas**: `motor_cmd_queue` es el contrato común entre las interfaces activas y el motor. WebSocket y Alpaca son las interfaces remotas activas; `cmd_input_task` es un canal local opcional y MQTT todavía no está implementado.
+3. **Desacoplamiento mediante colas**: `motor_cmd_queue` es el contrato común entre las interfaces activas y el motor. WebSocket y Alpaca son las interfaces remotas activas; MQTT todavía no está implementado.
 
 4. **Semáforo de Power Good (PG)**: `power_good_sem` desacopla `motor_task` de `power_monitor_task`. Motor solo energiza el driver después de confirmar PG.
 
@@ -77,7 +76,6 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 | Task | Core | Prioridad | Responsabilidad |
 |------|------|-----------|-----------------|
 | motor_task | 1 | 10 (alta) | Genera pulsos STEP al TMC2209, reporta posición a focuser_handler |
-| cmd_input_task | 0 | 5 | Canal local opcional/legacy: lee USB Serial/JTAG y parsea `steps,direction` |
 | i2c_sensors_task | 0 | 6 | Lee AS5600 (ángulo) y AHT21B (temperatura) periódicamente, reporta a focuser_handler |
 | power_monitor_task | 0 | 1 (baja) | Monitorea CH224K, libera power_good_sem cuando PG=OK |
 | preset_cmd_task | 0 | 4 | Movimiento de prueba/legacy: encola un movimiento predefinido y termina |
@@ -129,7 +127,6 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 // 1. DECLARACIONES de funciones (prototipos) antes de app_main()
 void motor_task(void *arg);
 void i2c_sensors_task(void *arg);
-void cmd_input_task(void *arg);
 
 // 2. app_main() arriba, se lee de un vistazo
 void app_main() {
@@ -168,7 +165,6 @@ static void i2c_sensors_task(void *arg) { ... }
    - Si falla → continúa sin control remoto
 6. **Crea tasks en orden**:
    - motor_task (Core 1, prioridad 10)
-   - cmd_input_task (Core 0, prioridad 5)
    - i2c_sensors_task (Core 0, prioridad 6)
    - power_monitor_task (Core 0, prioridad 1)
   - preset_cmd_task (actualmente activa como movimiento de prueba; legacy)

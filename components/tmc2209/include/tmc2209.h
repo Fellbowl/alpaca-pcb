@@ -84,8 +84,10 @@ typedef struct {
     tmc2209_halt_check_fn_t halt_check_fn; /* opcional (NULL = sin soporte de halt), ver arriba */
 } tmc2209_config_t;
 
-/* Handle del driver: cfg + estado derivado (semiperiodos de la rampa, ya
- * precalculados por tmc2209_init() a partir de rev_per_sec_*). */
+/* Handle del driver: cfg + estado derivado (retardos posteriores al pulso
+ * STEP, ya precalculados por tmc2209_init() a partir de rev_per_sec_*).
+ * Los nombres half_period_* se conservan por compatibilidad con la API
+ * existente, aunque representan el retardo restante tras el pulso STEP. */
 typedef struct {
     tmc2209_config_t cfg;
     uint32_t half_period_start_us;
@@ -93,7 +95,7 @@ typedef struct {
 } tmc2209_t;
 
 /* Inicializa GPIOs (MS1/MS2/STEP/DIR/EN) y el driver UART, y precalcula los
- * semiperiodos de la rampa. NO toca todavia los registros del TMC2209 (eso
+ * intervalos entre pasos de la rampa. NO toca todavia los registros del TMC2209 (eso
  * lo hace tmc2209_configure()) ni lo habilita (EN queda en 1 = deshabilitado). */
 esp_err_t tmc2209_init(tmc2209_t *drv, const tmc2209_config_t *cfg);
 

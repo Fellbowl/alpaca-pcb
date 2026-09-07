@@ -91,10 +91,8 @@ wifi_init.c             2 funciones   (3%)
 6 tareas concurrentes:
 
 ┌─────────────────────────────────────────────────────────────┐
-│ CORE 0 (PRO_CPU) - WiFi + Sensores + Entrada              │
+│ CORE 0 (PRO_CPU) - WiFi + Sensores                        │
 │                                                             │
-│ cmd_input_task (Prio 6)          [USB Serial parsing]      │
-│      ↓                                                      │
 │   motor_cmd_queue (FreeRTOS Queue)    ← Interfaz de datos  │
 │      ↓                                                      │
 │ i2c_sensors_task (Prio 5)        [AS5600 + AHT21B polling] │
@@ -164,13 +162,7 @@ wifi_init.c             2 funciones   (3%)
    ├─ Complejidad: BAJA (no hay arbitración, buses independientes)
    └─ Archivos: as5600.c (109 LOC), aht21b.c (145 LOC)
 
-3. USB Serial (Entrada de comandos)
-   ├─ Formato: "steps,direction\n" (texto plano)
-   ├─ Parsing: cmd_input_task
-   ├─ Complejidad: BAJA (trivial)
-   └─ Archivo: main.c (cmd_input_task)
-
-4. WebSocket (Telemetría live)
+3. WebSocket (Telemetría live)
    ├─ Handshake: HTTP → WS
    ├─ Broadcast: A múltiples clientes
    ├─ Async send: httpd_queue_work (evita deadlock)
@@ -285,7 +277,6 @@ Escritores de focuser_state:         2 tasks
 
 Lectores de focuser_state:           3 tasks
 ├─ ws_telemetry_task         (broadcast status)
-├─ cmd_input_task            (validación)
 └─ alpaca_http_task          (endpoints HTTP activos)
 
 Protección: Mutex focuser_handler
@@ -545,11 +536,10 @@ Métricas esperadas:
 └─ Stack usage: Verificar con FreeRTOS heap monitoring
 ```
 
-### Bottleneck #2: Parsing USB + WebSocket (Core 0)
+### Bottleneck #2: WebSocket (Core 0)
 
 ```
 Factor limitante: I/O bound (lectura serial + socket)
-├─ cmd_input_task: Espera línea completa (slow)
 ├─ ws_telemetry_task: Broadcast a múltiples clientes
 ├─ i2c_sensors_task: Polling cada 200 ms
 ├─ Si se congestiona: Comandos lentos, telemetría perdida

@@ -49,6 +49,7 @@ typedef struct {
     const char *device_description;
     const char *driver_info;
     const char *driver_version;
+    const char *device_unique_id;
 
     /* Parametros de la task interna (alpaca_http_task). */
     UBaseType_t task_priority;
