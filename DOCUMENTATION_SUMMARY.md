@@ -5,7 +5,7 @@ Proyecto: MODULAR-PCB-FOCUSHANDLER
 
 ## Revisión del Proyecto - 2026-09-07
 
-La documentación fue revisada contra el código actual. Desde el resumen original se incorporó el componente `alpaca` y la migración ya no está limitada a endpoints de management: el firmware implementa management, lecturas del focuser, `PUT /move` y `PUT /halt`.
+La documentación fue revisada contra el código actual. Desde el resumen original se incorporó el componente `alpaca`: el firmware implementa management, lecturas del focuser, `PUT /move` y `PUT /halt`. Esto es un subconjunto funcional, no todavía una implementación completa ni validada de todo el contrato ASCOM Alpaca Focuser.
 
 ### Cambios reflejados
 
@@ -14,7 +14,7 @@ La documentación fue revisada contra el código actual. Desde el resumen origin
 - `ARCHITECTURE.md` ahora documenta Alpaca, sus rutas y el código legacy.
 - `main.md` ahora refleja que AS5600 y AHT21B comparten un único bus `I2C_NUM_0`.
 - El límite real de comandos relativos es `204800` micropasos (`200 * 256 * 4`).
-- Se eliminó de la documentación la afirmación de que Alpaca estaba en Step 3/5.
+- Se reemplazó la afirmación de migración por un estado preciso: Alpaca está funcional en alcance parcial y aún requiere endpoints estándar y pruebas externas.
 
 ### Código legacy identificado
 

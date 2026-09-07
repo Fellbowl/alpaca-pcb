@@ -14,6 +14,8 @@ wifi_init_sta() -> ws_server_start() -> alpaca_start()
 
 El servidor escucha en el puerto configurado por `ALPACA_HTTP_PORT` (actualmente `11111`). Usa un segundo `ctrl_port` interno de HTTPD para coexistir con el servidor WebSocket del puerto 80.
 
+**Estado de implementación:** funcional en el alcance actualmente codificado, pero todavía no es una implementación completa del contrato ASCOM Alpaca Focuser ni está validada con un cliente Alpaca externo. Las rutas existentes permiten consultar el estado y ejecutar `Move`/`Halt`; quedan endpoints estándar por completar.
+
 ## Endpoints Implementados
 
 ### Management
@@ -41,6 +43,12 @@ Base: `/api/v1/focuser/0`
 | GET | `/temperature` | Temperatura actual |
 | PUT | `/move` | Solicita movimiento absoluto |
 | PUT | `/halt` | Solicita parada controlada |
+
+### Rutas Alpaca todavía faltantes
+
+- `PUT /api/v1/focuser/0/connected`.
+- `PUT /api/v1/focuser/0/tempcomp`.
+- Metadatos del dispositivo como `name`, `description`, `driverinfo`, `driverversion` e `interfaceversion`, si se requiere compatibilidad completa con clientes Alpaca.
 
 Los GET consultan el estado mediante funciones públicas de `focuser_handler`. El PUT `/move` llama a `focuser_handler_move_to()`, que valida el rango, calcula el delta y encola un `motor_cmd_t` relativo. El PUT `/halt` usa el flag atómico de parada, fuera de la cola normal.
 
@@ -100,6 +108,17 @@ Cliente Alpaca
 ```
 
 El servidor no controla GPIO, UART o I2C directamente. El movimiento físico sigue siendo responsabilidad exclusiva de `motor_task` y `tmc2209`.
+
+## Compatibilidad y Estabilidad
+
+La implementación puede considerarse **operativa para el subconjunto implementado**, no todavía “estable/completa” en sentido de conformidad Alpaca. Antes de declararla estable deben probarse:
+
+1. `/management/apiversions` y `/management/v1/description`.
+2. Todos los GET registrados.
+3. `PUT /move` con posiciones válidas, fuera de rango y queue llena.
+4. `PUT /halt` durante un movimiento real.
+5. Respuestas de transaction IDs y códigos de error con un cliente ASCOM Alpaca real.
+6. Interacción simultánea de Alpaca y WebSocket.
 
 ## Relación con WebSocket
 

@@ -183,7 +183,7 @@ wifi_init.c             2 funciones   (3%)
    ├─ Endpoints: Management (actual)
    ├─ Status: Management + GET + PUT Move/Halt (activo)
    ├─ Pending: Endpoints de control (Steps 4/5)
-   ├─ Complejidad: MEDIA (REST estándar, pero incompleto)
+   ├─ Complejidad: MEDIA (REST estándar, endpoints principales implementados)
    └─ Archivo: alpaca.c (236 LOC)
 ```
 
@@ -198,7 +198,7 @@ wifi_init.c             2 funciones   (3%)
 │ I2C (Sensores)   │ No    │ N/A     │ Binario    │ Estable  │
 │ USB Serial       │ No    │ No      │ Texto      │ Estable  │
 │ WebSocket        │ Sí    │ Sí      │ JSON       │ Estable  │
-│ Alpaca HTTP      │ No    │ No      │ JSON       │ 3/5 🟡   │
+│ Alpaca HTTP      │ No    │ No      │ JSON       │ Parcial  │
 └──────────────────┴───────┴─────────┴────────────┴──────────┘
 ```
 
@@ -429,12 +429,12 @@ radon cc -a main/main.c components/*/*.c
    ├─ Detección: FreeRTOS deadlock detector
    └─ Mitigación Actual: ✓ BIEN DOCUMENTADO
 
-3. ALPACA HTTP INCOMPLETO
-   ├─ Causa: Los endpoints Alpaca de control todavía requieren pruebas de integración
-   ├─ Síntoma: Clientes HTTP no pueden controlar motor
-   ├─ Prevención: Completar Steps 4/5
-   ├─ Timeline: Fase 2 del roadmap
-   └─ Mitigación Actual: ⚠️ DOCUMENTADO como TODO
+3. ALPACA HTTP REQUIERE VALIDACIÓN DE INTEGRACIÓN
+   ├─ Causa: La implementación existe, pero faltan pruebas documentadas con clientes Alpaca reales
+   ├─ Síntoma posible: Diferencias de contrato o comportamiento con clientes externos
+   ├─ Prevención: Probar management, GET, Move, Halt y errores
+   ├─ Timeline: Validación de integración
+   └─ Mitigación Actual: ⚠️ Rutas implementadas y documentadas
 ```
 
 ### 🟠 ALTOS (Monitoreo requerido)
@@ -605,7 +605,7 @@ echo "5000,0" > /dev/ttyUSB0  # desde Python/terminal
    └─ Impacto: Alto
 
 2. ⚠️ COMPLETAR Alpaca HTTP (Steps 4/5)
-   ├─ Estado: Management + GET + PUT Move/Halt implementados
+   ├─ Estado: Management + GET + PUT Move/Halt implementados; faltan rutas estándar
    ├─ Propuesta: Agregar endpoints de control
    ├─ Beneficio: Sistema usable con software externo
    ├─ Tiempo: 2-3 horas
@@ -759,7 +759,7 @@ PUNTOS DÉBILES:
 ✗ main.c concentra 42% del código (refactorizar)
 ✗ 6 tasks concurrentes (alto riesgo si no se respetan patrones)
 ✗ 5 protocolos (gran superficie de bugs)
-⚠️ Alpaca HTTP implementado; falta validar integración completa con clientes externos
+⚠️ Alpaca HTTP parcial; faltan rutas estándar y validación con clientes externos
 ✗ Sin pruebas unitarias documentadas
 
 RECOMENDACIONES INMEDIATAS:

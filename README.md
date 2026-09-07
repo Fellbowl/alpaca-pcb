@@ -22,7 +22,7 @@ MODULAR PCB Alpaca is an ESP32-S3 firmware for controlling a TMC2209 stepper dri
 - **Modular sensor drivers** — AS5600 and AHT21B drivers expose independent APIs and share an orchestrated I2C bus without depending on the TMC2209 or on each other.
 - **Fault-tolerant sensor initialization** — Sensor detection uses real device transactions with bounded retries; an unavailable sensor remains disabled while the rest of the firmware continues running.
 - **Remote telemetry and acknowledgements** — The embedded HTTP/WebSocket server broadcasts command acknowledgements and JSON telemetry without making the transport layer aware of motor or sensor semantics.
-- **ASCOM Alpaca Focuser API** — Management, focuser GET endpoints, absolute `Move`, and `Halt` are served on TCP port `11111`.
+- **ASCOM Alpaca Focuser API (parcial)** — Management, focuser GET endpoints, absolute `Move`, and `Halt` are served on TCP port `11111`; full Alpaca conformance and external-client validation remain pending.
 
 ## Documentación de Arquitectura
 

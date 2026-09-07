@@ -57,7 +57,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 - **WiFi**: Station mode, SSID/password configurado en main.c
 - **WebSocket**: `ws://<IP>:80/ws`, máximo 4 clientes
 - **Telemetría**: JSON broadcast cada 5s
-- **Alpaca**: HTTP en puerto 11111, management + GET de focuser + PUT Move/Halt
+- **Alpaca**: HTTP en puerto 11111, management + GET de focuser + PUT Move/Halt; implementación parcial del contrato completo
 - **Documentación**: [wifi_init.md](components/wifi_init/wifi_init.md), [ws_server.md](components/ws_server/ws_server.md), [alpaca.md](components/alpaca/alpaca.md)
 
 ## Flujo de Datos: Comando → Motor → Posición
@@ -286,6 +286,7 @@ Motor Status LED = GPIO12  (ON si motor_task vivo)
 - Alpaca management: implementado.
 - Alpaca GET del focuser: implementado.
 - Alpaca PUT `move`/`halt`: implementado.
+- Pendiente para conformidad completa: PUT `connected`, PUT `tempcomp`, metadatos del dispositivo y pruebas con cliente Alpaca real.
 - Próximos pasos opcionales: rate limiting, estadísticas, homing automático y retirar canales legacy si ya no se necesitan.
 
 ## Código Legacy u Opcional

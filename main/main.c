@@ -268,7 +268,7 @@
 #define MOTOR_PG_WAIT_LOG_PERIOD_MS  2000
 
 /* ---- WiFi / WebSocket ---- */
-#define WIFI_SSID       "victus"
+#define WIFI_SSID       "JuanPablo"
 #define WIFI_PASSWORD   "password"
 #define WIFI_MAX_RETRIES 10
 
@@ -280,7 +280,7 @@
 
 #define WS_TELEMETRY_PERIOD_MS  5000
 
-/* ---- Alpaca HTTP (management-only por ahora, Paso 3) ----
+/* ---- Alpaca HTTP ----
  * Puerto DISTINTO de WS_SERVER_PORT a proposito: son dos servidores HTTP
  * independientes conviviendo en el mismo firmware, cada uno en su propio
  * puerto. alpaca.[ch] no conoce estas macros -- viajan como argumentos
@@ -294,6 +294,11 @@
 #define ALPACA_TASK_PRIORITY     3
 #define ALPACA_TASK_CORE_ID      0
 #define ALPACA_TASK_STACK_WORDS  4096
+#define ALPACA_DEVICE_NAME         "PUJ Focuser"
+#define ALPACA_DEVICE_DESCRIPTION  "Focuser controlado por TMC2209 + AS5600 + AHT21B"
+#define ALPACA_DRIVER_INFO         "Javeriana G5 - Control Electronico de Enfoque Automatico"
+#define ALPACA_DRIVER_VERSION      "0.1.0"
+
 
 /* ============================================================================
  *  TIPOS
@@ -453,7 +458,7 @@ void app_main(void)
             }
         }
 
-        /* alpaca_start(): Paso 3 del plan de migracion. Se llama AQUI,
+        /* alpaca_start(): servidor Alpaca activo. Se llama AQUI,
          * dentro del MISMO bloque de WiFi ok (no en un if/else nuevo),
          * por la misma razon que ws_server_start() -- sin red no tiene
          * caso levantar un servidor HTTP. El modulo alpaca.[ch] no sabe
@@ -461,12 +466,16 @@ void app_main(void)
          * todavia, eso llega en el Paso 4/5): toda la config sale de
          * aca, igual que focuser_handler_init(). Un fallo aqui no es
          * fatal -- el resto del firmware sigue funcionando sin Alpaca. */
-        alpaca_config_t alpaca_cfg = {
+                alpaca_config_t alpaca_cfg = {
             .port                 = ALPACA_HTTP_PORT,
             .server_name          = ALPACA_SERVER_NAME,
             .manufacturer         = ALPACA_MANUFACTURER,
             .manufacturer_version = ALPACA_MANUFACTURER_VER,
             .location             = ALPACA_LOCATION,
+            .device_name          = ALPACA_DEVICE_NAME,
+            .device_description   = ALPACA_DEVICE_DESCRIPTION,
+            .driver_info          = ALPACA_DRIVER_INFO,
+            .driver_version       = ALPACA_DRIVER_VERSION,
             .task_priority        = ALPACA_TASK_PRIORITY,
             .task_core_id         = ALPACA_TASK_CORE_ID,
             .task_stack_words     = ALPACA_TASK_STACK_WORDS,
@@ -474,6 +483,7 @@ void app_main(void)
         if (alpaca_start(&alpaca_cfg) != ESP_OK) {
             ESP_LOGE(TAG, "No se pudo arrancar el servidor Alpaca.");
         }
+
     }
 
     /* motor_task: core 1 en solitario, prioridad alta (control de tiempo real) */
@@ -702,7 +712,7 @@ static void motor_task(void *arg)
     }
     ESP_LOGI(TAG, "[motor_task] Power Good confirmado. Inicializando TMC2209.");
 
-    tmc2209_config_t cfg = {
+        tmc2209_config_t cfg = {
         .uart_port = TMC_UART_PORT,
         .pin_uart_rx = PIN_UART_RX,
         .pin_uart_tx = PIN_UART_TX,
@@ -718,6 +728,11 @@ static void motor_task(void *arg)
         .mres = TMC_MRES,
         .rev_per_sec_start = TARGET_REV_PER_SEC_START,
         .rev_per_sec_cruise = TARGET_REV_PER_SEC_CRUISE,
+        /* halt_check_fn: tmc2209.c NO conoce focuser_handler (modularidad,
+         * ver tmc2209.h) -- este callback es lo unico que lo conecta con
+         * el resto del sistema. main.c, como orquestador, es quien hace
+         * ese cableado, igual que ya hace con motor_cmd_queue o
+         * ws_server_config_t.on_message. */
         .halt_check_fn = focuser_handler_halt_requested,
     };
 

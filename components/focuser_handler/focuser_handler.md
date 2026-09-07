@@ -5,7 +5,7 @@ Componente central de orquestación de estado del focuser.
 
 Responsabilidades:
 - Mantener estado lógico único y consistente del focuser
-- Filtrar acceso a estado desde transportes (WebSocket, futura API Alpaca)
+- Filtrar acceso a estado desde transportes (WebSocket y API Alpaca)
 - Traducir posición absoluta pedida → comando relativo en motor_cmd_queue
 - Reportar estado desde tasks de hardware (motor, sensores)
 - Manejar halt (parada de emergencia) atomically
@@ -181,7 +181,7 @@ websocket_rx -> motor_cmd_queue (comando relativo)
               → focuser_handler_get_* (lectura de estado)
 ```
 
-### Alpaca HTTP (Futuro)
+### Alpaca HTTP
 ```
 HTTP GET /api/v1/focuser/position -> focuser_handler_get_position()
 HTTP PUT /api/v1/focuser/move -> motor_cmd_queue
