@@ -401,7 +401,7 @@ int32_t tmc2209_move_steps(tmc2209_t *drv, uint32_t n, int dir_level)
         esp_rom_delay_us(2);
         gpio_set_level(drv->cfg.pin_step, 0);
         esp_rom_delay_us(half_period);
-        usteps_count += 1 - (dir_level << 1);
+        usteps_count += (dir_level << 1) - 1;
 
         if (halting) {
             if (halt_final_pulse) {

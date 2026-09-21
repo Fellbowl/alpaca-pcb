@@ -204,7 +204,7 @@ esp_err_t focuser_handler_move_to(int64_t target_position_usteps, TickType_t que
      * aumenta), dir=1 cierra (posicion disminuye). */
     motor_cmd_t cmd = {
         .steps = (uint32_t)(delta > 0 ? delta : -delta),
-        .dir   = (delta > 0) ? 0 : 1,
+        .dir   = (delta > 0) ? 1 : 0,
     };
 
     if (xQueueSend(s_state.motor_cmd_queue, &cmd, queue_timeout) != pdTRUE) {

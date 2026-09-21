@@ -258,7 +258,7 @@
 #define CH224K_R2_KOHM      2.7f
 
 #define PRESET_STEPS_PER_MOVE   51200
-#define PRESET_DIR              0
+#define PRESET_DIR              1
 #define PRESET_MOVE_COUNT       1
 
 /* ---- Espera de motor_task por Power Good ---- */
