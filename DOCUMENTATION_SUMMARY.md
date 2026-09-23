@@ -109,7 +109,7 @@ Lectura Recomendada:
 
 ### main.md
 - ✓ Arquitectura multi-núcleo Core 0/Core 1
-- ✓ Tabla de 6 tareas FreeRTOS
+- ✓ Tabla actualizada de tareas FreeRTOS, incluida `thermal_comp_task`
 - ✓ Notas de diseño (fail-fast, reintentos, PG conditioning)
 - ✓ Flujo de arranque app_main
 - ✓ Tabla de constantes de configuración
@@ -180,7 +180,7 @@ Lectura Recomendada:
    - Diagrama Core 0 vs Core 1
    - Razón de la separación (timing del motor)
 
-2. **Tareas Principales** (tabla 6 tasks)
+2. **Tareas Principales** (tabla actualizada de tasks)
    - Core, prioridad, función, stack, documentación
 
 3. **Protocolos y Comunicación**

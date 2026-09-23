@@ -12,6 +12,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 ├─ i2c_sensors_task (AS5600/AHT21B) │  └─ (aislado, tiempo real)
 ├─ power_monitor_task (CH224K)       │
 ├─ preset_cmd_task (legacy test)     │
+├─ thermal_comp_task                 │
 ├─ ws_telemetry_task                 │
 └─ WiFi/BT stack (Espressif)         └─ (sin interference)
 ```
@@ -29,6 +30,7 @@ CORE 0 (PRO_CPU)                    CORE 1 (APP_CPU)
 | power_monitor_task | 0 | 1 (baja) | Monitorea CH224K, libera `power_good_sem` | 4KB | — |
 | preset_cmd_task | 0 | 4 | Movimiento de prueba; termina después de encolar | 2KB | — |
 | ws_telemetry_task | 0 | 3 | Broadcast JSON cada 5s | 4KB | — |
+| thermal_comp_task | 0 | 2 | Evalua deriva termica y solicita correcciones | 3KB | `main/thermal_comp_task.md` |
 
 ## Protocolos y Comunicación
 
@@ -146,6 +148,7 @@ focuser_state_t {
    - power_monitor_task (Core 0) - libera power_good_sem cuando PG=OK
       - preset_cmd_task (Core 0, legacy de prueba)
    - ws_telemetry_task (Core 0) - si WiFi OK
+  - thermal_comp_task (Core 0) - evalua TempComp cada 5 s
 
 ## Notas de Diseño Críticas
 

@@ -80,6 +80,7 @@ Archivo orquestador del sistema ESP32-S3. Coordina múltiples tareas FreeRTOS en
 | power_monitor_task | 0 | 1 (baja) | Monitorea CH224K, libera power_good_sem cuando PG=OK |
 | preset_cmd_task | 0 | 4 | Movimiento de prueba/legacy: encola un movimiento predefinido y termina |
 | ws_telemetry_task | 0 | 3 | Broadcast JSON con estado cada 5s si cliente WS conectado |
+| thermal_comp_task | 0 | 2 | Evalua deriva termica y encola correcciones cuando TempComp esta activo |
 
 ## Notas de Diseño Críticas
 
@@ -169,6 +170,7 @@ static void i2c_sensors_task(void *arg) { ... }
    - power_monitor_task (Core 0, prioridad 1)
   - preset_cmd_task (actualmente activa como movimiento de prueba; legacy)
    - ws_telemetry_task (si WiFi OK)
+    - thermal_comp_task (Core 0, compensacion termica cada 5 s)
 
 ## Constantes de Configuración Principales
 

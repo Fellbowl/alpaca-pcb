@@ -30,6 +30,7 @@ flowchart TD
     TASKS --> SENSORS[i2c_sensors_task]
     TASKS --> POWER[power_monitor_task]
     TASKS --> PRESET[preset_cmd_task]
+    TASKS --> THERMAL[thermal_comp_task]
     POWER -->|PG confirmado| SEMAPHORE[Dar power_good_sem]
     SEMAPHORE --> MOTOR_INIT[Inicializar TMC2209]
     MOTOR --> MOTOR_INIT
@@ -52,7 +53,8 @@ flowchart TD
 8. Crea `i2c_sensors_task` en el Core 0.
 9. Crea `power_monitor_task` en el Core 0.
 10. Crea `preset_cmd_task` en el Core 0.
-11. `app_main()` termina; FreeRTOS continúa ejecutando las tasks de forma concurrente.
+11. Crea `thermal_comp_task` en el Core 0.
+12. `app_main()` termina; FreeRTOS continúa ejecutando las tasks de forma concurrente.
 
 ## Distribución por core
 
@@ -63,6 +65,7 @@ flowchart LR
         I2C[i2c_sensors_task<br/>prioridad 6]
         POWER[power_monitor_task<br/>prioridad 1]
         PRESET[preset_cmd_task<br/>prioridad 4]
+        THERMAL[thermal_comp_task<br/>prioridad 2]
         TELEMETRY[ws_telemetry_task<br/>prioridad 3]
         ALPACA_HTTP[alpaca_http_task<br/>HTTP Alpaca]
         ALPACA_DISCOVERY[alpaca_discovery_task<br/>UDP discovery]
@@ -81,6 +84,8 @@ flowchart LR
     MOTOR --> STATE
     STATE --> TELEMETRY
     STATE --> ALPACA_HTTP
+    STATE --> THERMAL
+    THERMAL -->|motor_cmd_queue| MOTOR
     ALPACA_DISCOVERY --> ALPACA_HTTP
 ```
 
@@ -140,7 +145,7 @@ sequenceDiagram
 | `alpaca_http_task` | Servidor HTTP Alpaca | Arranca `esp_http_server`, registra handlers y permanece atendiendo peticiones en `ALPACA_HTTP_PORT` |
 | `alpaca_discovery_task` | Descubrimiento Alpaca | Escucha solicitudes UDP, valida el mensaje y responde con el puerto HTTP Alpaca |
 
-Ambas se ejecutan en el Core 0 junto con la red y las tasks de sensores, potencia, preset y telemetria. Ninguna controla directamente el TMC2209: los comandos pasan por `focuser_handler` o `motor_cmd_queue` hasta `motor_task` en el Core 1.
+Estas tasks se ejecutan en el Core 0 junto con la red y las tasks de sensores, potencia, preset y telemetria. `thermal_comp_task` consulta el estado termico y solicita correcciones mediante `focuser_handler`; ninguna de las tasks Alpaca controla directamente el TMC2209.
 
 ## Resumen para un diagrama unico
 
@@ -154,7 +159,7 @@ Boot
        -> fallo: modo local
        -> exito: WebSocket + telemetria + Alpaca
   -> crear motor_task en Core 1
-  -> crear tasks de sensores, potencia y preset en Core 0
+    -> crear tasks de sensores, potencia, preset y compensacion termica en Core 0
   -> power_monitor_task confirma PG
   -> motor_task inicializa TMC2209
   -> productores colocan comandos en motor_cmd_queue
@@ -172,3 +177,4 @@ Boot
 - Flujo de telemetria: `main/ws_telemetry_task.md`.
 - Flujo HTTP Alpaca: `main/alpaca_http_task.md`.
 - Flujo de descubrimiento Alpaca: `main/alpaca_discovery_task.md`.
+- Flujo de compensacion termica: `main/thermal_comp_task.md`.
