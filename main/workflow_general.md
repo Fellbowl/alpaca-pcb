@@ -47,7 +47,7 @@ flowchart TD
 6. Si WiFi conecta:
    - Inicia el servidor WebSocket.
    - Si el WebSocket inicia correctamente, crea `ws_telemetry_task`.
-   - Inicia el servidor Alpaca, que crea internamente sus tareas HTTP y discovery UDP.
+    - `alpaca_start()` crea `alpaca_http_task` y `alpaca_discovery_task` en el Core 0.
 7. Crea `motor_task` en el Core 1.
 8. Crea `i2c_sensors_task` en el Core 0.
 9. Crea `power_monitor_task` en el Core 0.
@@ -64,7 +64,8 @@ flowchart LR
         POWER[power_monitor_task<br/>prioridad 1]
         PRESET[preset_cmd_task<br/>prioridad 4]
         TELEMETRY[ws_telemetry_task<br/>prioridad 3]
-        ALPACA[alpaca_http_task<br/>alpaca_discovery_task]
+        ALPACA_HTTP[alpaca_http_task<br/>HTTP Alpaca]
+        ALPACA_DISCOVERY[alpaca_discovery_task<br/>UDP discovery]
     end
 
     subgraph C1[Core 1 - APP_CPU]
@@ -79,7 +80,8 @@ flowchart LR
     I2C --> STATE[Estado del focuser]
     MOTOR --> STATE
     STATE --> TELEMETRY
-    STATE --> ALPACA
+    STATE --> ALPACA_HTTP
+    ALPACA_DISCOVERY --> ALPACA_HTTP
 ```
 
 ## Motivo de la distribución
@@ -129,6 +131,17 @@ sequenceDiagram
 - **CH224K falla:** `power_monitor_task` termina sin liberar el semaforo; `motor_task` permanece esperando y no energiza el TMC2209.
 - **Sensor I2C falla:** su task continúa con ese sensor no disponible; no detiene el motor.
 
+## Tasks Alpaca en Core 0
+
+`alpaca_start()` se ejecuta desde `app_main()` despues de una conexion WiFi exitosa y crea dos tasks adicionales:
+
+| Task | Funcion | Comportamiento principal |
+|---|---|---|
+| `alpaca_http_task` | Servidor HTTP Alpaca | Arranca `esp_http_server`, registra handlers y permanece atendiendo peticiones en `ALPACA_HTTP_PORT` |
+| `alpaca_discovery_task` | Descubrimiento Alpaca | Escucha solicitudes UDP, valida el mensaje y responde con el puerto HTTP Alpaca |
+
+Ambas se ejecutan en el Core 0 junto con la red y las tasks de sensores, potencia, preset y telemetria. Ninguna controla directamente el TMC2209: los comandos pasan por `focuser_handler` o `motor_cmd_queue` hasta `motor_task` en el Core 1.
+
 ## Resumen para un diagrama unico
 
 ```text
@@ -157,3 +170,5 @@ Boot
 - Flujo de sensores: `main/i2c_sensors_task.md`.
 - Flujo de alimentacion: `main/power_monitor_task.md`.
 - Flujo de telemetria: `main/ws_telemetry_task.md`.
+- Flujo HTTP Alpaca: `main/alpaca_http_task.md`.
+- Flujo de descubrimiento Alpaca: `main/alpaca_discovery_task.md`.
