@@ -264,6 +264,23 @@
 /* ---- Espera de motor_task por Power Good ---- */
 #define MOTOR_PG_WAIT_LOG_PERIOD_MS  2000
 
+/* ---- Compensacion termica (thermal_comp_task) -----
+ * THERMAL_COMP_STEPS_PER_DEGREE_C: micropasos a corregir por cada grado
+ * Celsius COMPLETO de deriva respecto a la temperatura de referencia.
+ * El signo importa: positivo si el foco optimo se ALEJA (mas pasos en
+ * dir=0/abre) cuando SUBE la temperatura; negativo si es al reves.
+ * TODO: calibrar con datos reales (serie temperatura vs. posicion
+ * optima medida con el V-curve/HFR) antes de confiar en este valor --
+ * arranca en 0 (sin efecto) a proposito para no mover el motor con un
+ * coeficiente inventado.
+ *
+ * THERMAL_COMP_POLL_PERIOD_MS: periodo de evaluacion. 5s es generoso
+ * frente a la deriva termica tipica (~2 C/hora, ver
+ * engineering-decisions): no hace falta reaccionar mas rapido que eso,
+ * y mantiene la task casi todo el tiempo dormida. */
+#define THERMAL_COMP_STEPS_PER_DEGREE_C   0     /* TODO: calibrar */
+#define THERMAL_COMP_POLL_PERIOD_MS       5000
+
 /* ---- WiFi / WebSocket ---- */
 #define WIFI_SSID       "JuanPablo"
 #define WIFI_PASSWORD   "password"
@@ -358,6 +375,7 @@ static void i2c_sensors_task(void *arg);
 static void power_monitor_task(void *arg);
 static void preset_cmd_task(void *arg);
 static void ws_telemetry_task(void *arg);
+static void thermal_comp_task(void *arg);
 
 /* ============================================================================
  *  APP_MAIN
@@ -510,6 +528,17 @@ void app_main(void)
     created = xTaskCreatePinnedToCore(preset_cmd_task, "preset_cmd_task", 2048, NULL, 4, NULL, 0);
     if (created != pdPASS) {
         ESP_LOGE(TAG, "No se pudo crear preset_cmd_task");
+    }
+
+    /* thermal_comp_task: corrige por deriva termica SOLO si TempComp
+     * esta activado (bandera de focuser_handler, activable/desactivable
+     * por Alpaca via PUT .../tempcomp -- ver alpaca_focuser_tempcomp_put_handler())
+     * y SOLO si el motor esta quieto (focuser_handler_get_is_moving()).
+     * Prioridad baja, igual que power_monitor_task: no es critica en
+     * tiempo, solo debe reaccionar dentro de THERMAL_COMP_POLL_PERIOD_MS. */
+    created = xTaskCreatePinnedToCore(thermal_comp_task, "thermal_comp_task", 3072, NULL, 2, NULL, 0);
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "No se pudo crear thermal_comp_task");
     }
 }
 
@@ -1043,6 +1072,126 @@ static void ws_telemetry_task(void *arg)
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ *  THERMAL_COMP_TASK - Core 0
+ *  Compensacion termica por umbral de 1 grado C completo respecto a una
+ *  referencia movil. Lee temperatura/estado a traves de focuser_handler
+ *  (fuente unica de verdad, ya protegida por mutex -- ver
+ *  engineering-decisions) y por eso la lectura de "motor quieto" desde
+ *  aqui es segura entre cores sin necesitar una bandera propia.
+ *
+ *  Doble condicion para actuar (ver nota de arbitraje en
+ *  areas/thermal-compensation-arbitration): (1) TempComp activado y
+ *  |deriva| >= 1 grado C completo respecto a la referencia, Y (2) motor
+ *  quieto. El control por imagen sigue escribiendo directo a
+ *  motor_cmd_queue (via websocket) o a focuser_handler_move_to() (via
+ *  Alpaca) sin pasar por aqui -- no existe un arbitro central: si el
+ *  motor esta ocupado con un movimiento de imagen, esta task simplemente
+ *  no actua y reintenta en el siguiente ciclo, sin perder el delta
+ *  pendiente (la referencia solo avanza lo que efectivamente se aplico).
+ * --------------------------------------------------------------------------- */
+static void thermal_comp_task(void *arg)
+{
+    (void)arg;
+
+    bool  have_reference   = false;
+    bool  was_enabled      = false;
+    float reference_temp_c = 0.0f;
+
+    ESP_LOGI(TAG, "[thermal_comp_task] Listo en core %d.", xPortGetCoreID());
+    ESP_LOGI(TAG, "[thermal_comp_task] Stack libre minimo tras inicializacion: %u words.",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(THERMAL_COMP_POLL_PERIOD_MS));
+
+        /* TempComp es la MISMA bandera que escribe
+         * alpaca_focuser_tempcomp_put_handler() a traves de
+         * focuser_handler_set_tempcomp() -- Alpaca ya puede
+         * activar/desactivar esta task sin cambio adicional. */
+        bool enabled = focuser_handler_get_tempcomp();
+
+        /* Transicion desactivado -> activado: se resetea la referencia
+         * al valor ACTUAL de temperatura. Sin esto, toda la deriva
+         * acumulada mientras estuvo apagado se aplicaria de un solo
+         * salto apenas se reactive. */
+        if (enabled && !was_enabled) {
+            if (climate.ready) {
+                reference_temp_c = focuser_handler_get_temperature();
+                have_reference = true;
+                ESP_LOGI(TAG, "[thermal_comp_task] TempComp activado. Referencia=%.2f C",
+                         reference_temp_c);
+            } else {
+                have_reference = false;
+                ESP_LOGW(TAG, "[thermal_comp_task] TempComp activado pero el AHT21B aun no "
+                               "esta listo; se fijara la referencia en cuanto responda.");
+            }
+        }
+        was_enabled = enabled;
+
+        if (!enabled || !climate.ready) {
+            continue; /* apagado por Alpaca/websocket, o sin sensor con que comparar */
+        }
+
+        if (!have_reference) {
+            reference_temp_c = focuser_handler_get_temperature();
+            have_reference = true;
+            ESP_LOGI(TAG, "[thermal_comp_task] Referencia inicial=%.2f C", reference_temp_c);
+            continue;
+        }
+
+        float current_temp_c = focuser_handler_get_temperature();
+        float diff_c = current_temp_c - reference_temp_c;
+
+        /* Solo se actua sobre grados COMPLETOS: la parte fraccionaria
+         * NO se descarta, queda pendiente para el siguiente ciclo
+         * porque la referencia solo avanza lo que realmente se
+         * compenso (ver mas abajo). */
+        int32_t delta_degrees = (int32_t)diff_c; /* trunca hacia 0 */
+
+        if (delta_degrees == 0) {
+            continue; /* aun no se acumula 1 grado C completo de deriva */
+        }
+
+        if (focuser_handler_get_is_moving()) {
+            /* Motor ocupado (control por imagen u otro comando en
+             * curso): NO se preempta. Se reintenta en el siguiente
+             * ciclo sin perder el delta pendiente -- la referencia no
+             * se toca hasta que la correccion se aplique de verdad. */
+            ESP_LOGI(TAG, "[thermal_comp_task] Deriva de %ld C detectada pero el motor esta en "
+                           "movimiento; se pospone la correccion.", (long)delta_degrees);
+            continue;
+        }
+
+        int64_t current_position = focuser_handler_get_position();
+        int64_t target_position  = current_position +
+            (int64_t)delta_degrees * THERMAL_COMP_STEPS_PER_DEGREE_C;
+
+        /* focuser_handler_move_to() ya valida el rango [0, max_step],
+         * marca is_moving=true y encola en motor_cmd_queue -- exactamente
+         * el mismo camino que usa el PUT .../move de Alpaca. */
+        esp_err_t err = focuser_handler_move_to(target_position, pdMS_TO_TICKS(100));
+
+        if (err == ESP_OK) {
+            reference_temp_c += (float)delta_degrees;
+            ESP_LOGI(TAG, "[thermal_comp_task] Compensacion encolada: %ld C -> target=%lld usteps "
+                           "(nueva referencia=%.2f C).",
+                     (long)delta_degrees, (long long)target_position, reference_temp_c);
+        } else if (err == ESP_ERR_INVALID_ARG) {
+            /* Target fuera de [0, max_step]: la referencia NO avanza,
+             * se reintenta mientras siga fuera de rango, sin acumular
+             * error, hasta que el focuser quede en una posicion desde
+             * la que la correccion si quepa. */
+            ESP_LOGW(TAG, "[thermal_comp_task] Correccion de %ld C llevaria el focuser fuera de "
+                           "rango (target=%lld). Se descarta este ciclo.",
+                     (long)delta_degrees, (long long)target_position);
+        } else {
+            ESP_LOGW(TAG, "[thermal_comp_task] No se pudo encolar la correccion termica (%s).",
+                     esp_err_to_name(err));
+        }
     }
 }
 
