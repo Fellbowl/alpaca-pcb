@@ -300,6 +300,8 @@ static void alpaca_http_task(void *arg)
     config.server_port = port;
     config.max_uri_handlers = ALPACA_MAX_URI_HANDLERS;
     config.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;
+    config.max_open_sockets = 4;
+    config.lru_purge_enable = true;
 
     esp_err_t err = httpd_start(&alpaca_httpd, &config);
     if (err != ESP_OK) {
