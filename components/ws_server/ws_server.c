@@ -105,7 +105,8 @@ esp_err_t ws_server_start(const ws_server_config_t *cfg)
 
     httpd_config_t httpd_cfg = HTTPD_DEFAULT_CONFIG();
     httpd_cfg.server_port = cfg->port;
-    httpd_cfg.max_open_sockets = (cfg->max_clients > 0) ? cfg->max_clients : 4;
+    httpd_cfg.max_open_sockets = ((cfg->max_clients > 0) ? cfg->max_clients : 4) + 1;
+    httpd_cfg.lru_purge_enable = true;
     /* uri_match_fn por defecto (httpd_uri_match_wildcard) alcanza para un
      * solo path fijo como "/ws"; si mas adelante agregas rutas REST de
      * Alpaca en el mismo servidor, revisa que no colisionen. */
